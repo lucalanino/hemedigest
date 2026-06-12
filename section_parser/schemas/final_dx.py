@@ -1,4 +1,4 @@
-"""Final diagnosis section schema (report-level)."""
+"""Final diagnosis section schema"""
 
 from typing import Literal, Optional
 
@@ -18,10 +18,7 @@ FinalDxCategory = Literal[
 
 
 class FinalDxSchema(BaseModel):
-    """Structured fields extracted from the report-level final diagnosis.
-
-    This is report-level (one per order_id), not per-instance.
-    """
+    """Structured fields extracted from the report-level final diagnosis"""
 
     category: Optional[FinalDxCategory] = Field(
         None,

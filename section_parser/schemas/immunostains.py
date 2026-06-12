@@ -1,4 +1,4 @@
-"""Immunostains section schema."""
+"""Immunostains section schema"""
 
 from typing import Optional
 

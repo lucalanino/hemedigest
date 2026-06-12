@@ -1,4 +1,4 @@
-"""Flow cytometry section schema."""
+"""Flow cytometry section schema"""
 
 from typing import Literal, Optional
 

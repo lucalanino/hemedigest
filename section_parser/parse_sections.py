@@ -1,12 +1,11 @@
 """Parse bone marrow report sections via Azure OpenAI structured outputs.
 
-Reads ``data/sections.jsonl`` (one specimen instance per line), parses each
+Reads a .jsonl file formatted as one specimen instance per line, parses each
 non-null section with its own schema + system prompt, and writes one flat,
-timestamped CSV (one row per ``(order_id, instance)``).
+timestamped CSV.
 
-Auth is interactive browser-based Azure AD (no API key). Calls run concurrently
-with gentle rate limiting, and progress is checkpointed so an interrupted run
-can resume.
+Auth is interactive browser-based Azure AD. Calls run concurrently with gentle
+rate limiting, and progress is checkpointed so an interrupted run can resume.
 
 Usage:
     python -m section_parser.parse_sections [--config PATH] [--limit N]
@@ -48,11 +47,8 @@ from section_parser.schemas import (
     ImmunostainsSchema,
 )
 
-# ---------------------------------------------------------------------------
-# Section configuration
-# ---------------------------------------------------------------------------
+# Report sections configuration ----
 
-# Order here determines column order in the output CSV.
 INSTANCE_SECTIONS: dict[str, tuple[type[BaseModel], str]] = {
     "biopsy": (BiopsySchema, prompts.BIOPSY_PROMPT),
     "aspirate": (AspirateSchema, prompts.ASPIRATE_PROMPT),
@@ -61,16 +57,12 @@ INSTANCE_SECTIONS: dict[str, tuple[type[BaseModel], str]] = {
     "immunostains": (ImmunostainsSchema, prompts.IMMUNOSTAINS_PROMPT),
 }
 
-# Report-level section, deduped per order_id.
 FINAL_DX_SECTION = (FinalDxSchema, prompts.FINAL_DX_PROMPT)
 FINAL_DX_KEY = "final_dx"
 
 ID_COLUMNS = ["order_id", "pat_mrn_id", "description", "specimen_date", "instance"]
 
-
-# ---------------------------------------------------------------------------
-# Config & client
-# ---------------------------------------------------------------------------
+# Client configuration ----
 
 
 def load_config(config_path: str) -> dict[str, Any]:
@@ -81,7 +73,9 @@ def load_config(config_path: str) -> dict[str, Any]:
     az = config["azure_openai"]
     # Env vars take precedence; fall back to config; reject leftover placeholders.
     az["endpoint"] = os.environ.get("AZURE_OPENAI_ENDPOINT", az.get("endpoint", ""))
-    az["deployment"] = os.environ.get("AZURE_OPENAI_DEPLOYMENT", az.get("deployment", ""))
+    az["deployment"] = os.environ.get(
+        "AZURE_OPENAI_DEPLOYMENT", az.get("deployment", "")
+    )
     az["tenant_id"] = os.environ.get("AZURE_TENANT_ID", az.get("tenant_id", ""))
 
     for field in ("endpoint", "deployment", "tenant_id"):
@@ -96,11 +90,7 @@ def load_config(config_path: str) -> dict[str, Any]:
 
 
 def build_client(az: dict[str, Any]) -> AsyncAzureOpenAI:
-    """Build the async client with interactive browser AD auth.
-
-    Credential is created once (single browser prompt); the token provider
-    caches and refreshes across the run.
-    """
+    """Build the async client with interactive browser AD auth"""
     credential = InteractiveBrowserCredential(tenant_id=az["tenant_id"])
     token_provider = get_bearer_token_provider(credential, az["scope"])
     return AsyncAzureOpenAI(
@@ -110,9 +100,7 @@ def build_client(az: dict[str, Any]) -> AsyncAzureOpenAI:
     )
 
 
-# ---------------------------------------------------------------------------
-# The single, isolated model call
-# ---------------------------------------------------------------------------
+# Model call ----
 
 
 async def parse_section(
@@ -122,12 +110,7 @@ async def parse_section(
     text: str,
     schema: type[BaseModel],
 ) -> Optional[BaseModel]:
-    """Run one structured-output call -- the ONLY place that touches the model API.
-
-    Reasoning-class model: no ``temperature``/``max_tokens`` (cap with
-    ``max_completion_tokens`` if needed). ``chat.completions.parse`` is the
-    structured-output helper, promoted out of ``beta`` in openai 2.x.
-    """
+    """Run one structured-output call"""
     completion = await client.chat.completions.parse(
         model=deployment,
         messages=[
@@ -142,9 +125,7 @@ async def parse_section(
     return message.parsed
 
 
-# ---------------------------------------------------------------------------
-# Gentle rate limiting
-# ---------------------------------------------------------------------------
+# Rate limiting ----
 
 
 class RateLimiter:
@@ -185,20 +166,15 @@ class RateLimiter:
 
 
 def estimate_tokens(system_prompt: str, text: str) -> int:
-    """Rough token estimate (~chars/4) + headroom; gpt-5.4 has no public tokenizer.
-
-    Overestimating is intentional -- it keeps us under the TPM ceiling.
-    """
+    """Rough token estimate (~chars/4) + headroom with intentional overestimation (800)"""
     return (len(system_prompt) + len(text)) // 4 + 800
 
 
-# ---------------------------------------------------------------------------
-# Checkpointing
-# ---------------------------------------------------------------------------
+# Checkpointing ----
 
 
 def schema_signature() -> str:
-    """Short fingerprint of the current output schema (all CSV columns).
+    """Short fingerprint of the current output schema.
 
     Stored on every checkpoint record so a schema change automatically
     invalidates stale entries instead of silently producing mixed-schema output.
@@ -206,7 +182,9 @@ def schema_signature() -> str:
     return hashlib.sha1("|".join(build_fieldnames()).encode("utf-8")).hexdigest()[:12]
 
 
-def load_checkpoint(path: Path, expected_sig: str) -> dict[str, Optional[dict[str, Any]]]:
+def load_checkpoint(
+    path: Path, expected_sig: str
+) -> dict[str, Optional[dict[str, Any]]]:
     """Return ``{key: result_dict_or_None}`` for completed units matching the schema.
 
     Records written under a different schema signature are skipped (re-queued),
@@ -259,9 +237,7 @@ class CheckpointWriter:
         self._fh.close()
 
 
-# ---------------------------------------------------------------------------
-# Work units
-# ---------------------------------------------------------------------------
+# Work units ----
 
 
 class WorkUnit:
@@ -274,7 +250,6 @@ class WorkUnit:
         self.text = text
 
 
-# Unit-separator char can't appear in an order_id, so keys never collide (unlike '|').
 _KEY_SEP = "\x1f"
 
 
@@ -287,7 +262,7 @@ def final_dx_key(order_id: str) -> str:
 
 
 def build_work_units(rows: list[dict[str, Any]]) -> list[WorkUnit]:
-    """Build instance-level units (per non-null section) + one final_dx unit per order_id."""
+    """Build instance-level units + one final_dx unit per order_id."""
     units: list[WorkUnit] = []
 
     for row in rows:
@@ -297,7 +272,12 @@ def build_work_units(rows: list[dict[str, Any]]) -> list[WorkUnit]:
             text = row.get(section)
             if text and str(text).strip():
                 units.append(
-                    WorkUnit(instance_key(order_id, instance, section), schema, prompt, str(text))
+                    WorkUnit(
+                        instance_key(order_id, instance, section),
+                        schema,
+                        prompt,
+                        str(text),
+                    )
                 )
 
     # final_dx: one unit per unique order_id that has non-null diagnosis text.
@@ -315,9 +295,7 @@ def build_work_units(rows: list[dict[str, Any]]) -> list[WorkUnit]:
     return units
 
 
-# ---------------------------------------------------------------------------
-# Execution
-# ---------------------------------------------------------------------------
+# Run ----
 
 
 async def run_unit(
@@ -337,8 +315,10 @@ async def run_unit(
     # not re-queued; a transient exhausted-retry failure stays unset to retry next run.
     checkpoint_it = False
 
-    async with limiter.sem:
-        for attempt in range(max_retries + 1):
+    for attempt in range(max_retries + 1):
+        # Hold a concurrency slot only for the call itself; the backoff sleep
+        # below runs outside it so a retrying unit doesn't park a scarce slot.
+        async with limiter.sem:
             # Re-acquire per attempt so retried calls also count against RPM/TPM.
             await limiter.acquire(est)
             try:
@@ -350,14 +330,17 @@ async def run_unit(
                 break
             except (LengthFinishReasonError, ContentFilterFinishReasonError) as exc:
                 # Deterministic -- retrying repeats it; record a permanent null.
-                tqdm.write(f"[non-retryable, recorded as null] {unit.key}: {type(exc).__name__}")
+                tqdm.write(
+                    f"[non-retryable, recorded as null] {unit.key}: {type(exc).__name__}"
+                )
                 checkpoint_it = True
                 break
             except Exception as exc:  # noqa: BLE001 - continue-on-error by design
                 if attempt >= max_retries:
                     tqdm.write(f"[failed, will retry on rerun] {unit.key}: {exc}")
                     break
-                await asyncio.sleep(retry_base_delay * (2**attempt))
+        # Reached only on a retryable, non-final failure (all other paths break).
+        await asyncio.sleep(retry_base_delay * (2**attempt))
 
     results[unit.key] = result
     if checkpoint_it:
@@ -394,9 +377,7 @@ async def process(
         )
 
 
-# ---------------------------------------------------------------------------
-# Output assembly
-# ---------------------------------------------------------------------------
+# Output assembly ----
 
 
 def build_fieldnames() -> list[str]:
@@ -441,9 +422,7 @@ def write_csv(out_rows: list[dict[str, Any]], output_path: Path) -> None:
         writer.writerows(out_rows)
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
+# Entry point ----
 
 
 def read_jsonl(path: str) -> list[dict[str, Any]]:
@@ -546,7 +525,9 @@ async def async_main(args: argparse.Namespace) -> None:
 
     out_rows = assemble_rows(rows, results)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = Path(files["output_dir"]) / f"{files['output_prefix']}_{timestamp}.csv"
+    output_path = (
+        Path(files["output_dir"]) / f"{files['output_prefix']}_{timestamp}.csv"
+    )
     write_csv(out_rows, output_path)
 
     print(f"\nWrote {len(out_rows)} rows to: {output_path}")
@@ -557,10 +538,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Parse bone marrow report sections.")
     default_config = str(Path(__file__).with_name("config.yaml"))
     parser.add_argument("--config", default=default_config, help="Path to config.yaml")
-    parser.add_argument("--limit", type=int, default=None, help="Only process first N input rows (smoke test)")
-    parser.add_argument("--fresh", action="store_true", help="Ignore/remove existing checkpoint")
-    parser.add_argument("--concurrency", type=int, default=None, help="Override max concurrency")
-    parser.add_argument("--yes", action="store_true", help="Skip the confirmation prompt")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only process first N input rows (smoke test)",
+    )
+    parser.add_argument(
+        "--fresh", action="store_true", help="Ignore/remove existing checkpoint"
+    )
+    parser.add_argument(
+        "--concurrency", type=int, default=None, help="Override max concurrency"
+    )
+    parser.add_argument(
+        "--yes", action="store_true", help="Skip the confirmation prompt"
+    )
     args = parser.parse_args()
 
     try:

@@ -1,1 +1,1 @@
-"""Bone marrow report section parser (Azure OpenAI structured outputs)."""
+"""Bone marrow report section parser"""

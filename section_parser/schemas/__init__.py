@@ -1,4 +1,4 @@
-"""Pydantic schemas for structured extraction, one per report section."""
+"""Pydantic schemas for structured extraction"""
 
 from section_parser.schemas.aspirate import AspirateSchema
 from section_parser.schemas.biopsy import BiopsySchema

@@ -1,4 +1,4 @@
-"""Biopsy (trephine core) section schema."""
+"""Biopsy section schema"""
 
 from typing import Optional
 

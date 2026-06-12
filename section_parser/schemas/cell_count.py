@@ -1,4 +1,4 @@
-"""Aspirate cell count (differential) section schema."""
+"""Aspirate cell count section schema"""
 
 from typing import Optional
 
@@ -6,8 +6,7 @@ from pydantic import BaseModel, Field
 
 
 class CellCountSchema(BaseModel):
-    """Structured fields extracted from the aspirate cell count / differential section.
-
+    """Structured fields extracted from the aspirate cell count section.
     This is the PRIMARY source for the blast count.
     """
 

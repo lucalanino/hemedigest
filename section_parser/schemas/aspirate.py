@@ -1,4 +1,4 @@
-"""Aspirate (bone marrow aspirate smear) section schema."""
+"""Aspirate section schema"""
 
 from typing import Optional
 
