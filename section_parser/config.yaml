@@ -4,8 +4,10 @@
 azure_openai:
   endpoint: "<YOUR_AZURE_OPENAI_ENDPOINT>"
   deployment: "<YOUR_DEPLOYMENT>"
-  # Rolling next-gen value; carries gpt-5.x features. Avoid date-pinned versions.
-  api_version: "preview"
+  # Date-pinned preview: known-good for this deployment and supports
+  # structured outputs + reasoning_effort. The rolling "preview" alias stalled
+  # chat.completions.parse on the VM, so we pin it.
+  api_version: "2024-12-01-preview"
   tenant_id: "<YOUR_TENANT_ID>"
   scope: "https://cognitiveservices.azure.com/.default"
   # gpt-5.x reasoning effort: none | low | medium | high | xhigh ('minimal' unsupported on 5.1+).

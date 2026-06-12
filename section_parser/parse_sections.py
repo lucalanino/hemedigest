@@ -107,6 +107,10 @@ def build_client(az: dict[str, Any]) -> AsyncAzureOpenAI:
         azure_endpoint=az["endpoint"],
         azure_ad_token_provider=token_provider,
         api_version=az["api_version"],
+        # No SDK-level retries: run_unit already retries with backoff. Stacking
+        # the SDK's silent retries on top turned a failing call into a multi-minute
+        # apparent hang, so we let our own loop own retry/backoff.
+        max_retries=0,
     )
 
 
