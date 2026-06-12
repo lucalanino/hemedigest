@@ -4,9 +4,12 @@
 azure_openai:
   endpoint: "<YOUR_AZURE_OPENAI_ENDPOINT>"
   deployment: "<YOUR_DEPLOYMENT>"
-  api_version: "2024-12-01-preview"
+  # Rolling next-gen value; carries gpt-5.x features. Avoid date-pinned versions.
+  api_version: "preview"
   tenant_id: "<YOUR_TENANT_ID>"
   scope: "https://cognitiveservices.azure.com/.default"
+  # gpt-5.x reasoning effort: none | low | medium | high | xhigh ('minimal' unsupported on 5.1+).
+  reasoning_effort: "low"
 
 files:
   input_jsonl: "data/sections.jsonl"

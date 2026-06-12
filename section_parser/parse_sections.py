@@ -86,6 +86,16 @@ def load_config(config_path: str) -> dict[str, Any]:
                 f"or via the matching environment variable "
                 f"(AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_DEPLOYMENT / AZURE_TENANT_ID)."
             )
+
+    # gpt-5.x reasoning effort. 'minimal' is unsupported on 5.1+; omit to use the
+    # model default. Validate early so a typo fails before any API call.
+    az.setdefault("reasoning_effort", "low")
+    valid_efforts = {"none", "minimal", "low", "medium", "high", "xhigh"}
+    if az["reasoning_effort"] not in valid_efforts:
+        raise SystemExit(
+            f"Azure config 'reasoning_effort' must be one of {sorted(valid_efforts)}; "
+            f"got {az['reasoning_effort']!r}."
+        )
     return config
 
 
@@ -109,6 +119,7 @@ async def parse_section(
     system_prompt: str,
     text: str,
     schema: type[BaseModel],
+    reasoning_effort: str,
 ) -> Optional[BaseModel]:
     """Run one structured-output call"""
     completion = await client.chat.completions.parse(
@@ -118,6 +129,7 @@ async def parse_section(
             {"role": "user", "content": text},
         ],
         response_format=schema,
+        reasoning_effort=reasoning_effort,
     )
     message = completion.choices[0].message
     if getattr(message, "refusal", None):
@@ -307,6 +319,7 @@ async def run_unit(
     results: dict[str, Optional[dict[str, Any]]],
     max_retries: int,
     retry_base_delay: float,
+    reasoning_effort: str,
     pbar: tqdm,
 ) -> None:
     est = estimate_tokens(unit.prompt, unit.text)
@@ -323,7 +336,12 @@ async def run_unit(
             await limiter.acquire(est)
             try:
                 parsed = await parse_section(
-                    client, deployment, unit.prompt, unit.text, unit.schema
+                    client,
+                    deployment,
+                    unit.prompt,
+                    unit.text,
+                    unit.schema,
+                    reasoning_effort,
                 )
                 result = parsed.model_dump() if parsed is not None else None
                 checkpoint_it = True
@@ -357,6 +375,7 @@ async def process(
     checkpoint: CheckpointWriter,
     max_retries: int,
     retry_base_delay: float,
+    reasoning_effort: str,
 ) -> None:
     with tqdm(total=len(units), desc="Parsing sections", unit="call") as pbar:
         await asyncio.gather(
@@ -370,6 +389,7 @@ async def process(
                     results,
                     max_retries,
                     retry_base_delay,
+                    reasoning_effort,
                     pbar,
                 )
                 for unit in units
@@ -484,6 +504,7 @@ async def async_main(args: argparse.Namespace) -> None:
     print(f"Already done (skipped):  {len(units) - len(pending)}")
     print(f"To process now:          {len(pending)}")
     print(f"Model / deployment:      {az['deployment']}")
+    print(f"Reasoning effort:        {az['reasoning_effort']}")
     print(f"Concurrency:             {concurrency}")
     print(f"{'=' * 56}")
 
@@ -518,6 +539,7 @@ async def async_main(args: argparse.Namespace) -> None:
                 checkpoint_writer,
                 proc["max_retries"],
                 proc["retry_base_delay"],
+                az["reasoning_effort"],
             )
         finally:
             checkpoint_writer.close()
