@@ -1,0 +1,24 @@
+# Bone marrow section parser config.
+# Real Azure values are overridden by env vars (AZURE_OPENAI_ENDPOINT /
+# AZURE_OPENAI_DEPLOYMENT / AZURE_TENANT_ID); never commit real values here.
+
+azure_openai:
+  endpoint: "<YOUR_AZURE_OPENAI_ENDPOINT>"
+  deployment: "<YOUR_DEPLOYMENT>"
+  api_version: "2024-12-01-preview"
+  tenant_id: "<YOUR_TENANT_ID>"
+  scope: "https://cognitiveservices.azure.com/.default"
+
+files:
+  input_jsonl: "data/sections.jsonl"
+  output_dir: "data"               # final CSV gets a timestamp suffix
+  output_prefix: "parsed_sections"
+  checkpoint: "data/.checkpoint.jsonl"   # stable path so interrupted runs resume
+
+processing:
+  # Stay under the deployment limits (RPM 2500, TPM 250000).
+  max_concurrency: 8
+  target_rpm: 2000
+  target_tpm: 200000
+  max_retries: 5
+  retry_base_delay: 2.0       # seconds; exponential backoff base
