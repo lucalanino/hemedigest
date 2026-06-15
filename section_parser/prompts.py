@@ -50,11 +50,10 @@ from a CD34 stain but stay open to other descriptions (e.g. CD117). A very small
 blast percentage (with or without a "<" sign) should be encoded as 0."""
 
 FINAL_DX_PROMPT = """\
-You classify the FINAL DIAGNOSIS of a bone marrow pathology report into a single \
-macro-category. Choose exactly one of: AML, ALL, MDS, MPN, MDS/MPN, Lymphoma, \
-Myeloma, Solid, Other.
+You classify the FINAL DIAGNOSIS of a bone marrow pathology report, following the \
+field descriptions in the schema.
 
-Rules:
-- Base the choice only on the diagnosis text provided.
-- Pick the single best-fitting category for the overall/primary diagnosis.
-- Use "Other" if it does not fit the listed categories or cannot be determined."""
+Base the classification ONLY on the diagnosis rendered on the analyzed specimen. \
+Prior history, prior diagnoses, and concurrent diagnoses at other sites must not \
+change the category; if this specimen shows no morphologic disease, classify it as \
+Negative even when the patient has a known malignancy."""

@@ -9,12 +9,17 @@ FinalDxCategory = Literal[
     "ALL",
     "MDS",
     "MPN",
+    "CML",
     "MDS/MPN",
+    "CMML",
     "Lymphoma",
     "Myeloma",
     "Solid",
+    "Negative",
     "Other",
 ]
+
+FinalDxStatus = Literal["overt", "residual", "remission", "negative"]
 
 
 class FinalDxSchema(BaseModel):
@@ -23,9 +28,25 @@ class FinalDxSchema(BaseModel):
     category: Optional[FinalDxCategory] = Field(
         None,
         description=(
-            "The single best macro-category for the final diagnosis. Choose exactly "
-            "one of: AML, ALL, MDS, MPN, MDS/MPN, Lymphoma, Myeloma, Solid, Other. "
-            "Use 'Other' if it does not fit the listed categories or cannot be "
-            "determined."
+            "Single macro-category of the diagnosis rendered on the analyzed "
+            "specimen. Choose the most specific applicable category: classify CML "
+            "as CML and CMML as CMML rather than the broader MPN or MDS/MPN buckets. "
+            "Use 'Negative' when the specimen shows no morphologic disease (normal, "
+            "reactive, uninvolved, or in remission of a prior diagnosis). Use 'Other' "
+            "if no category fits or it cannot be determined."
+        ),
+    )
+    status: Optional[FinalDxStatus] = Field(
+        None,
+        description=(
+            "Disease status on the analyzed specimen, by the amount of detectable "
+            "disease:\n"
+            "- 'overt': frank/diagnostic disease is present; category is the entity.\n"
+            "- 'residual': disease is detectable only as minimal/measurable residual "
+            "disease; category is the entity.\n"
+            "- 'remission': no detectable disease but a prior diagnosis is known; "
+            "category is 'Negative'.\n"
+            "- 'negative': no disease and no known prior diagnosis (normal, reactive, "
+            "or uninvolved staging); category is 'Negative'."
         ),
     )

@@ -22,7 +22,7 @@ Clinical scope is myeloid neoplasms and ALL.
 - **flow**: blasts_pct, adequacy, source
 - **cell_count**: blasts_pct, mast_cells_pct
 - **immunostains**: blasts_pct
-- **final_dx** (per order_id): category ∈ {AML, ALL, MDS, MPN, MDS/MPN, Lymphoma, Myeloma, Solid, Other}
+- **final_dx** (per order_id): category ∈ {AML, ALL, MDS, MPN, CML, MDS/MPN, CMML, Lymphoma, Myeloma, Solid, Negative, Other}, status ∈ {overt, residual, remission, negative}. Classified from the diagnosis on the analyzed specimen only — history and concurrent diagnoses do not change it; a specimen with no morphologic disease (incl. remission) is Negative.
 
 ## Installation
 
@@ -115,7 +115,7 @@ Flags:
 | `--config PATH` | use a different config file |
 
 **Output:** `data/parsed_sections_<timestamp>.csv` (one row per `(order_id,
-instance)`; `final_dx_category` repeated per row).
+instance)`; the report-level `final_dx_category` / `final_dx_status` repeat per row).
 
 **Resume:** progress is checkpointed to `data/.checkpoint.jsonl` (a stable path, not
 timestamped), so an interrupted run continues where it left off. Failed cells are

@@ -408,7 +408,8 @@ def build_fieldnames() -> list[str]:
     fields = list(ID_COLUMNS)
     for section, (schema, _) in INSTANCE_SECTIONS.items():
         fields.extend(f"{section}_{name}" for name in schema.model_fields)
-    fields.append(f"{FINAL_DX_KEY}_category")
+    final_schema = FINAL_DX_SECTION[0]
+    fields.extend(f"{FINAL_DX_KEY}_{name}" for name in final_schema.model_fields)
     return fields
 
 
@@ -430,7 +431,8 @@ def assemble_rows(
 
         final = results.get(final_dx_key(order_id))
         if final:
-            out[f"{FINAL_DX_KEY}_category"] = final.get("category")
+            for name, value in final.items():
+                out[f"{FINAL_DX_KEY}_{name}"] = value
 
         out_rows.append(out)
     return out_rows
