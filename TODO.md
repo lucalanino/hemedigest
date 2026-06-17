@@ -83,6 +83,43 @@ cells are still skipped.
 **Note:** changes the schema-signature semantics slightly → do a one-time `--fresh`
 run after adding it.
 
+## Global dedup for instance text sections (measure first)
+
+Consider content-addressing the instance sections (`biopsy`, `aspirate`, `flow`,
+`cell_count`, `immunostains`, `specimen_header`) so byte-identical text is parsed
+once and fanned out.
+
+**Don't model this on `final_dx`.** `final_dx`'s content key (`order_id`,
+`sha1(text)`) is *not* a general dedup feature — it exists only because `final_dx`
+used to be **report-level** (one unit per `order_id`) and was recently made
+per-instance (`738d964`) so consult instances can carry different diagnoses. The
+content key just lets the common single-dx report collapse back to one unit per
+report — i.e. it preserves the old report-level cost while allowing per-instance
+divergence. It pays off because the dx is genuinely repeated verbatim across a
+report's instances.
+
+The instance sections have no such property: they're **per-specimen** — each
+instance carries its own biopsy/aspirate text — so a within-`order_id` content key
+would almost never collide. The only version with upside is a **global** content key
+(no `order_id` at all), collapsing identical text *anywhere* in the file: canned
+boilerplate, "SEE ABOVE" stubs, copy-pasted blocks, repeated `specimen_header`
+outside-institution headers. It's lossless (identical input → identical output, so
+fan-out is safe).
+
+**Gate it on data.** Value depends entirely on how much exact-duplicate text exists,
+and that's unknown. Before writing any code, run a one-off count of byte-identical
+texts per section across `sections.jsonl` (as a % of total work units). Watch for
+near-misses that aren't byte-identical (embedded newlines, trailing whitespace,
+punctuation) — normalize only if it's clearly safe, since aggressive normalization
+risks collapsing genuinely different specimens. If duplicates are <1–2%, skip it;
+if `specimen_header`/boilerplate shows real repetition, add a global key for just
+those sections.
+
+**Cost:** hashing is negligible (same assessment as content-hash checkpointing
+above). Interacts with that feature — if both land, the key is already content-
+derived, so the global-dedup change is mostly *dropping* the id from the key for the
+chosen sections.
+
 ## Config: async vs. no-async execution mode
 
 Expand `config.yaml` to choose between the current async fan-out and a simpler
