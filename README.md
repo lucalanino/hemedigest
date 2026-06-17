@@ -114,6 +114,14 @@ Flags:
 | `--yes` | skip the confirmation prompt |
 | `--config PATH` | use a different config file |
 
+**Section selection:** the `sections` list in `section_parser/config.yaml` controls
+which sections are parsed and emitted, even when the input file contains all of them.
+Comment out or remove any of `biopsy`, `aspirate`, `flow`, `cell_count`,
+`immunostains`, `final_dx` to skip it (skipped sections produce no work units and no
+output columns). Omit the block entirely to parse all sections. Toggling sections does
+not invalidate the checkpoint, so you can run a subset and add more later without
+re-parsing the sections already done.
+
 **Output:** `data/parsed_sections_<timestamp>.csv` (one row per `(order_id,
 instance)`; the report-level `final_dx_category` / `final_dx_status` repeat per row).
 

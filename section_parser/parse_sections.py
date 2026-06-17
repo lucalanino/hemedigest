@@ -60,7 +60,17 @@ INSTANCE_SECTIONS: dict[str, tuple[type[BaseModel], str]] = {
 FINAL_DX_SECTION = (FinalDxSchema, prompts.FINAL_DX_PROMPT)
 FINAL_DX_KEY = "final_dx"
 
+# Every section the parser knows how to handle, in output order.
+ALL_SECTIONS: list[str] = list(INSTANCE_SECTIONS) + [FINAL_DX_KEY]
+
 ID_COLUMNS = ["order_id", "pat_mrn_id", "description", "specimen_date", "instance"]
+
+
+def selected_instance_sections(
+    enabled: list[str],
+) -> dict[str, tuple[type[BaseModel], str]]:
+    """Instance-level sections to parse, preserving canonical order."""
+    return {k: v for k, v in INSTANCE_SECTIONS.items() if k in enabled}
 
 # Client configuration ----
 
@@ -96,6 +106,24 @@ def load_config(config_path: str) -> dict[str, Any]:
             f"Azure config 'reasoning_effort' must be one of {sorted(valid_efforts)}; "
             f"got {az['reasoning_effort']!r}."
         )
+
+    # Section selection: omitted -> parse all; otherwise parse the listed subset,
+    # de-duplicated and re-ordered to the canonical ALL_SECTIONS order.
+    sections = config.get("sections")
+    if sections is None:
+        sections = list(ALL_SECTIONS)
+    elif not isinstance(sections, list):
+        raise SystemExit("Config 'sections' must be a list of section names.")
+    unknown = [s for s in sections if s not in ALL_SECTIONS]
+    if unknown:
+        raise SystemExit(
+            f"Config 'sections' has unknown name(s) {unknown}; "
+            f"valid sections are {ALL_SECTIONS}."
+        )
+    selected = [s for s in ALL_SECTIONS if s in sections]
+    if not selected:
+        raise SystemExit("Config 'sections' is empty; list at least one section.")
+    config["sections"] = selected
     return config
 
 
@@ -194,8 +222,13 @@ def schema_signature() -> str:
 
     Stored on every checkpoint record so a schema change automatically
     invalidates stale entries instead of silently producing mixed-schema output.
+
+    Fingerprints the full canonical schema (all sections), independent of the
+    enabled subset, so toggling which sections to parse does not invalidate
+    checkpoint records for sections that are still enabled.
     """
-    return hashlib.sha1("|".join(build_fieldnames()).encode("utf-8")).hexdigest()[:12]
+    fields = build_fieldnames(ALL_SECTIONS)
+    return hashlib.sha1("|".join(fields).encode("utf-8")).hexdigest()[:12]
 
 
 def load_checkpoint(
@@ -277,14 +310,16 @@ def final_dx_key(order_id: str) -> str:
     return f"{order_id}{_KEY_SEP}{FINAL_DX_KEY}"
 
 
-def build_work_units(rows: list[dict[str, Any]]) -> list[WorkUnit]:
-    """Build instance-level units + one final_dx unit per order_id."""
+def build_work_units(rows: list[dict[str, Any]], enabled: list[str]) -> list[WorkUnit]:
+    """Build instance-level units + one final_dx unit per order_id, limited to
+    the enabled sections."""
     units: list[WorkUnit] = []
 
+    instance_sections = selected_instance_sections(enabled)
     for row in rows:
         order_id = row.get("order_id")
         instance = row.get("instance")
-        for section, (schema, prompt) in INSTANCE_SECTIONS.items():
+        for section, (schema, prompt) in instance_sections.items():
             text = row.get(section)
             if text and str(text).strip():
                 units.append(
@@ -297,16 +332,19 @@ def build_work_units(rows: list[dict[str, Any]]) -> list[WorkUnit]:
                 )
 
     # final_dx: one unit per unique order_id that has non-null diagnosis text.
-    seen: set[str] = set()
-    schema, prompt = FINAL_DX_SECTION
-    for row in rows:
-        order_id = row.get("order_id")
-        if order_id in seen:
-            continue
-        text = row.get(FINAL_DX_KEY)
-        if text and str(text).strip():
-            seen.add(order_id)
-            units.append(WorkUnit(final_dx_key(order_id), schema, prompt, str(text)))
+    if FINAL_DX_KEY in enabled:
+        seen: set[str] = set()
+        schema, prompt = FINAL_DX_SECTION
+        for row in rows:
+            order_id = row.get("order_id")
+            if order_id in seen:
+                continue
+            text = row.get(FINAL_DX_KEY)
+            if text and str(text).strip():
+                seen.add(order_id)
+                units.append(
+                    WorkUnit(final_dx_key(order_id), schema, prompt, str(text))
+                )
 
     return units
 
@@ -404,42 +442,49 @@ async def process(
 # Output assembly ----
 
 
-def build_fieldnames() -> list[str]:
+def build_fieldnames(enabled: list[str]) -> list[str]:
     fields = list(ID_COLUMNS)
-    for section, (schema, _) in INSTANCE_SECTIONS.items():
+    for section, (schema, _) in selected_instance_sections(enabled).items():
         fields.extend(f"{section}_{name}" for name in schema.model_fields)
-    final_schema = FINAL_DX_SECTION[0]
-    fields.extend(f"{FINAL_DX_KEY}_{name}" for name in final_schema.model_fields)
+    if FINAL_DX_KEY in enabled:
+        final_schema = FINAL_DX_SECTION[0]
+        fields.extend(f"{FINAL_DX_KEY}_{name}" for name in final_schema.model_fields)
     return fields
 
 
 def assemble_rows(
     rows: list[dict[str, Any]],
     results: dict[str, Optional[dict[str, Any]]],
+    enabled: list[str],
 ) -> list[dict[str, Any]]:
     out_rows: list[dict[str, Any]] = []
+    instance_sections = selected_instance_sections(enabled)
+    final_dx_on = FINAL_DX_KEY in enabled
     for row in rows:
         order_id = row.get("order_id")
         instance = row.get("instance")
         out: dict[str, Any] = {col: row.get(col) for col in ID_COLUMNS}
 
-        for section in INSTANCE_SECTIONS:
+        for section in instance_sections:
             parsed = results.get(instance_key(order_id, instance, section))
             if parsed:
                 for name, value in parsed.items():
                     out[f"{section}_{name}"] = value
 
-        final = results.get(final_dx_key(order_id))
-        if final:
-            for name, value in final.items():
-                out[f"{FINAL_DX_KEY}_{name}"] = value
+        if final_dx_on:
+            final = results.get(final_dx_key(order_id))
+            if final:
+                for name, value in final.items():
+                    out[f"{FINAL_DX_KEY}_{name}"] = value
 
         out_rows.append(out)
     return out_rows
 
 
-def write_csv(out_rows: list[dict[str, Any]], output_path: Path) -> None:
-    fieldnames = build_fieldnames()
+def write_csv(
+    out_rows: list[dict[str, Any]], output_path: Path, enabled: list[str]
+) -> None:
+    fieldnames = build_fieldnames(enabled)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     # csv writes None as an empty string -> null fields render as blank cells.
     with open(output_path, "w", encoding="utf-8", newline="") as f:
@@ -474,6 +519,7 @@ async def async_main(args: argparse.Namespace) -> None:
     az = config["azure_openai"]
     proc = config["processing"]
     files = config["files"]
+    sections = config["sections"]
 
     concurrency = (
         args.concurrency if args.concurrency is not None else proc["max_concurrency"]
@@ -490,7 +536,7 @@ async def async_main(args: argparse.Namespace) -> None:
         rows = rows[: args.limit]
         print(f"--limit: using first {len(rows)} rows")
 
-    units = build_work_units(rows)
+    units = build_work_units(rows, sections)
 
     checkpoint_path = Path(files["checkpoint"])
     if args.fresh and checkpoint_path.exists():
@@ -509,6 +555,7 @@ async def async_main(args: argparse.Namespace) -> None:
     print(f"Total work units:        {len(units)}")
     print(f"Already done (skipped):  {len(units) - len(pending)}")
     print(f"To process now:          {len(pending)}")
+    print(f"Sections:                {', '.join(sections)}")
     print(f"Model / deployment:      {az['deployment']}")
     print(f"Reasoning effort:        {az['reasoning_effort']}")
     print(f"Concurrency:             {concurrency}")
@@ -551,12 +598,12 @@ async def async_main(args: argparse.Namespace) -> None:
             checkpoint_writer.close()
             await client.close()
 
-    out_rows = assemble_rows(rows, results)
+    out_rows = assemble_rows(rows, results, sections)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_path = (
         Path(files["output_dir"]) / f"{files['output_prefix']}_{timestamp}.csv"
     )
-    write_csv(out_rows, output_path)
+    write_csv(out_rows, output_path, sections)
 
     print(f"\nWrote {len(out_rows)} rows to: {output_path}")
     print(f"Checkpoint retained at: {checkpoint_path}")

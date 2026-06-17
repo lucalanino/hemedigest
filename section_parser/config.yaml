@@ -19,6 +19,18 @@ files:
   output_prefix: "parsed"
   checkpoint: "data/.checkpoint.jsonl"
 
+# Which sections to parse. The input file may contain all sections; only the
+# ones listed here are parsed and emitted as columns. Comment out or remove a
+# section to skip it. Valid: biopsy, aspirate, flow, cell_count, immunostains,
+# final_dx. Omit this block entirely to parse all sections.
+sections:
+  - biopsy
+  - aspirate
+  - flow
+  - cell_count
+  - immunostains
+  - final_dx
+
 processing:
   max_concurrency: 20
   target_rpm: 2000
