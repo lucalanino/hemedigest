@@ -49,6 +49,20 @@ You are reading the IMMUNOSTAINS section. Estimate the blast percentage, usually
 from a CD34 stain but stay open to other descriptions (e.g. CD117). A very small \
 blast percentage (with or without a "<" sign) should be encoded as 0."""
 
+SPECIMEN_HEADER_PROMPT = """\
+You extract a single date from the header of an outside (consult) bone marrow \
+specimen. The header is mostly boilerplate: a referring institution name, \
+alphanumeric identifier/accession strings, and other clutter.
+
+Your only job is to find the relevant date and return it as ISO 'YYYY-MM-DD':
+- Source dates are written as mm/dd/yy or mm/dd/yyyy.
+- If several dates appear, pick the FIRST one, which is usually next to the \
+institution name and identifier strings.
+- The plausible year range is about 1995-2026. Use it to repair obvious typos \
+(e.g. '03/12/20150' -> '2015-03-12') and to resolve 2-digit years (95-99 -> \
+1995-1999, 00-26 -> 2000-2026).
+- If there is no plausible date, return null."""
+
 FINAL_DX_PROMPT = """\
 You classify the FINAL DIAGNOSIS of a bone marrow pathology report, following the \
 field descriptions in the schema.

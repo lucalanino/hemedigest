@@ -4,9 +4,8 @@
 azure_openai:
   endpoint: "<YOUR_AZURE_OPENAI_ENDPOINT>"
   deployment: "<YOUR_DEPLOYMENT>"
-  # Date-pinned preview: known-good for this deployment and supports
-  # structured outputs + reasoning_effort. The rolling "preview" alias stalled
-  # chat.completions.parse on the VM, so we pin it.
+  # Pinned to the classic dated-api surface for prod stability; portable to the
+  # v1 API where available. See README "API surface & version pinning".
   api_version: "2024-12-01-preview"
   tenant_id: "<YOUR_TENANT_ID>"
   scope: "https://cognitiveservices.azure.com/.default"
@@ -22,13 +21,14 @@ files:
 # Which sections to parse. The input file may contain all sections; only the
 # ones listed here are parsed and emitted as columns. Comment out or remove a
 # section to skip it. Valid: biopsy, aspirate, flow, cell_count, immunostains,
-# final_dx. Omit this block entirely to parse all sections.
+# specimen_header, final_dx. Omit this block entirely to parse all sections.
 sections:
   - biopsy
   - aspirate
   - flow
   - cell_count
   - immunostains
+  - specimen_header
   - final_dx
 
 processing:

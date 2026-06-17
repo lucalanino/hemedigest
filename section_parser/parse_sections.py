@@ -45,23 +45,29 @@ from section_parser.schemas import (
     FinalDxSchema,
     FlowSchema,
     ImmunostainsSchema,
+    SpecimenHeaderSchema,
 )
 
 # Report sections configuration ----
 
+FINAL_DX_KEY = "final_dx"
+
+# Every section is parsed at the (order_id, instance) grain, in output column
+# order. final_dx is parsed per instance too, but its work units are de-duplicated
+# by text (see final_dx_unit_key) so a diagnosis repeated across a report's
+# instances -- as happens for single-final-diagnosis YH cases -- is only sent once.
 INSTANCE_SECTIONS: dict[str, tuple[type[BaseModel], str]] = {
     "biopsy": (BiopsySchema, prompts.BIOPSY_PROMPT),
     "aspirate": (AspirateSchema, prompts.ASPIRATE_PROMPT),
     "flow": (FlowSchema, prompts.FLOW_PROMPT),
     "cell_count": (CellCountSchema, prompts.CELL_COUNT_PROMPT),
     "immunostains": (ImmunostainsSchema, prompts.IMMUNOSTAINS_PROMPT),
+    "specimen_header": (SpecimenHeaderSchema, prompts.SPECIMEN_HEADER_PROMPT),
+    FINAL_DX_KEY: (FinalDxSchema, prompts.FINAL_DX_PROMPT),
 }
 
-FINAL_DX_SECTION = (FinalDxSchema, prompts.FINAL_DX_PROMPT)
-FINAL_DX_KEY = "final_dx"
-
 # Every section the parser knows how to handle, in output order.
-ALL_SECTIONS: list[str] = list(INSTANCE_SECTIONS) + [FINAL_DX_KEY]
+ALL_SECTIONS: list[str] = list(INSTANCE_SECTIONS)
 
 ID_COLUMNS = ["order_id", "pat_mrn_id", "description", "specimen_date", "instance"]
 
@@ -306,14 +312,26 @@ def instance_key(order_id: str, instance: Any, section: str) -> str:
     return f"{order_id}{_KEY_SEP}{instance}{_KEY_SEP}{section}"
 
 
-def final_dx_key(order_id: str) -> str:
-    return f"{order_id}{_KEY_SEP}{FINAL_DX_KEY}"
+def final_dx_unit_key(order_id: str, text: str) -> str:
+    """Content-addressed key for a final_dx work unit.
+
+    Identical diagnosis text within an order_id collapses to a single key, so the
+    diagnosis is parsed once and fanned back out to every instance that shares it.
+    """
+    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+    return f"{order_id}{_KEY_SEP}{FINAL_DX_KEY}{_KEY_SEP}{digest}"
 
 
 def build_work_units(rows: list[dict[str, Any]], enabled: list[str]) -> list[WorkUnit]:
-    """Build instance-level units + one final_dx unit per order_id, limited to
-    the enabled sections."""
+    """Build one work unit per (order_id, instance, section) with non-empty text,
+    limited to the enabled sections.
+
+    final_dx units are keyed by text content rather than instance, so a diagnosis
+    repeated across a report's instances yields a single unit. The shared ``seen``
+    set then drops the duplicates as they recur.
+    """
     units: list[WorkUnit] = []
+    seen: set[str] = set()
 
     instance_sections = selected_instance_sections(enabled)
     for row in rows:
@@ -321,30 +339,17 @@ def build_work_units(rows: list[dict[str, Any]], enabled: list[str]) -> list[Wor
         instance = row.get("instance")
         for section, (schema, prompt) in instance_sections.items():
             text = row.get(section)
-            if text and str(text).strip():
-                units.append(
-                    WorkUnit(
-                        instance_key(order_id, instance, section),
-                        schema,
-                        prompt,
-                        str(text),
-                    )
-                )
-
-    # final_dx: one unit per unique order_id that has non-null diagnosis text.
-    if FINAL_DX_KEY in enabled:
-        seen: set[str] = set()
-        schema, prompt = FINAL_DX_SECTION
-        for row in rows:
-            order_id = row.get("order_id")
-            if order_id in seen:
+            if not (text and str(text).strip()):
                 continue
-            text = row.get(FINAL_DX_KEY)
-            if text and str(text).strip():
-                seen.add(order_id)
-                units.append(
-                    WorkUnit(final_dx_key(order_id), schema, prompt, str(text))
-                )
+            text = str(text)
+            if section == FINAL_DX_KEY:
+                key = final_dx_unit_key(order_id, text)
+            else:
+                key = instance_key(order_id, instance, section)
+            if key in seen:
+                continue
+            seen.add(key)
+            units.append(WorkUnit(key, schema, prompt, text))
 
     return units
 
@@ -446,9 +451,6 @@ def build_fieldnames(enabled: list[str]) -> list[str]:
     fields = list(ID_COLUMNS)
     for section, (schema, _) in selected_instance_sections(enabled).items():
         fields.extend(f"{section}_{name}" for name in schema.model_fields)
-    if FINAL_DX_KEY in enabled:
-        final_schema = FINAL_DX_SECTION[0]
-        fields.extend(f"{FINAL_DX_KEY}_{name}" for name in final_schema.model_fields)
     return fields
 
 
@@ -459,23 +461,22 @@ def assemble_rows(
 ) -> list[dict[str, Any]]:
     out_rows: list[dict[str, Any]] = []
     instance_sections = selected_instance_sections(enabled)
-    final_dx_on = FINAL_DX_KEY in enabled
     for row in rows:
         order_id = row.get("order_id")
         instance = row.get("instance")
         out: dict[str, Any] = {col: row.get(col) for col in ID_COLUMNS}
 
         for section in instance_sections:
-            parsed = results.get(instance_key(order_id, instance, section))
+            if section == FINAL_DX_KEY:
+                text = row.get(FINAL_DX_KEY)
+                if not (text and str(text).strip()):
+                    continue
+                parsed = results.get(final_dx_unit_key(order_id, str(text)))
+            else:
+                parsed = results.get(instance_key(order_id, instance, section))
             if parsed:
                 for name, value in parsed.items():
                     out[f"{section}_{name}"] = value
-
-        if final_dx_on:
-            final = results.get(final_dx_key(order_id))
-            if final:
-                for name, value in final.items():
-                    out[f"{FINAL_DX_KEY}_{name}"] = value
 
         out_rows.append(out)
     return out_rows

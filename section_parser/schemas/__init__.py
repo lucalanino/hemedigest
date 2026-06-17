@@ -6,6 +6,7 @@ from section_parser.schemas.cell_count import CellCountSchema
 from section_parser.schemas.final_dx import FinalDxSchema
 from section_parser.schemas.flow import FlowSchema
 from section_parser.schemas.immunostains import ImmunostainsSchema
+from section_parser.schemas.specimen_header import SpecimenHeaderSchema
 
 __all__ = [
     "AspirateSchema",
@@ -14,4 +15,5 @@ __all__ = [
     "FinalDxSchema",
     "FlowSchema",
     "ImmunostainsSchema",
+    "SpecimenHeaderSchema",
 ]

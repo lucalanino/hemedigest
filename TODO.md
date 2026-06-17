@@ -51,12 +51,15 @@ Make the model output cap configurable instead of relying on the SDK/model defau
 Make the checkpoint detect when a cell's **input text changed**, not just its
 identity.
 
-Today the checkpoint key is identity-based:
-`(order_id, instance, section)` for instance sections, `order_id` for `final_dx`
-(see `instance_key` / `final_dx_key` in `section_parser/parse_sections.py`). The
+Today most checkpoint keys are identity-based: `(order_id, instance, section)` for
+instance sections (see `instance_key` in `section_parser/parse_sections.py`). The
 section text is **not** part of the key and is not fingerprinted. So if the report
 text for an already-parsed cell changes but the ids stay the same, the run treats
 it as done and skips it — only `--fresh` forces a re-parse.
+
+`final_dx` is the exception: it is already content-addressed by `(order_id,
+sha1(text))` (see `final_dx_unit_key`), so changed diagnosis text auto-reparses.
+This section is about extending that to the instance sections.
 
 **Idea:** fold a content hash of the section text into the key (or store it as a
 separate field and compare on load), so changed text auto-reparses while unchanged
