@@ -27,10 +27,6 @@ Conclusions from a design discussion — record so we don't re-litigate:
   `safe_load`. TOML is the only real alternative but buys nothing here. Watch the YAML
   "Norway problem" (`no`/`yes`/`on`/`off` and unquoted version strings coercing to
   bool/number) — keep quoting stringy scalars.
-- **Validation upgrade (later, orthogonal to format):** as config grows, move
-  validation into a **pydantic-settings** model that loads the YAML, applies env
-  overrides, and type-checks in one place — replacing the hand-rolled checks in
-  `load_config`. Complements YAML; hold off until the config is bigger.
 
 ## Config: expose `max_completion_tokens`
 
@@ -149,20 +145,3 @@ again before tuning for throughput.
   - Make 429s observable: add a `tqdm.write` in the `except Exception` branch (log
     `type(exc).__name__`) on every retry, not just the final one.
   - Consider honoring `Retry-After` in the backoff instead of fixed exponential.
-
-## Config: async vs. no-async execution mode
-
-Expand `config.yaml` to choose between the current async fan-out and a simpler
-synchronous (sequential) execution path.
-
-- Add a config switch (e.g. `processing.mode: async | sync`, or an `async: true`
-  flag) to select the execution strategy.
-- `async` (current): `asyncio.gather` over work units with the `RateLimiter`
-  (semaphore + sliding-window RPM/TPM) — fast, the default.
-- `sync`: process units one at a time. Easier to debug, gentler on rate limits, no
-  concurrency to reason about; useful for small runs, troubleshooting, or
-  environments where the async path misbehaves (cf. the VM SDK-retry hang noted in
-  the runtime config).
-- Keep the checkpoint/resume, CSV assembly, and section-selection behavior identical
-  across both modes — only the dispatch loop differs.
-- Decide how `--concurrency` interacts with `sync` (ignore it, or error if both set).
