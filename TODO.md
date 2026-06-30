@@ -30,48 +30,13 @@ Conclusions from a design discussion — record so we don't re-litigate:
   "Norway problem" (`no`/`yes`/`on`/`off` and unquoted version strings coercing to
   bool/number) — keep quoting stringy scalars.
 
-## Content-hash checkpointing
-
-Make the checkpoint detect when a cell's **input text changed**, not just its
-identity.
-
-Today most checkpoint keys are identity-based: `(order_id, instance, section)` for
-instance sections (see `instance_key` in `section_parser/parse_sections.py`). The
-section text is **not** part of the key and is not fingerprinted. So if the report
-text for an already-parsed cell changes but the ids stay the same, the run treats
-it as done and skips it — only `--fresh` forces a re-parse.
-
-`final_dx` is the exception: it is already content-addressed by `(order_id,
-sha1(text))` (see `final_dx_unit_key`), so changed diagnosis text auto-reparses.
-This section is about extending that to the instance sections.
-
-**Idea:** fold a content hash of the section text into the key (or store it as a
-separate field and compare on load), so changed text auto-reparses while unchanged
-cells are still skipped.
-
-**Cost (already assessed — negligible):**
-- Runtime: hashing a few-KB section is microseconds, dwarfed by the rate-limited
-  API call; cheaper than work the hot path already does (`estimate_tokens`, request
-  serialization). No measurable impact even at 100k units.
-- File size: fixed add per record — ~12 bytes truncated like the existing `sig`,
-  ~64 bytes for full SHA-256 — on top of a record already dominated by the `result`
-  payload. ~1–6 MB at 100k records. Noise.
-
-**Design options:**
-1. Fold hash into the key. Simplest; old records linger in the append-only file
-   (deduped on load), bloat is the negligible amount above. *Leaning this way.*
-2. Store hash as a separate field; `load_checkpoint` recomputes per-unit hashes and
-   treats a mismatch as not-done. No stale keys, but needs the units passed into
-   `load_checkpoint`.
-
-**Note:** changes the schema-signature semantics slightly → do a one-time `--fresh`
-run after adding it.
-
 ## Global dedup for instance text sections (measure first)
 
-Consider content-addressing the instance sections (`biopsy`, `aspirate`, `flow`,
-`cell_count`, `immunostains`, `specimen_header`) so byte-identical text is parsed
-once and fanned out.
+Instance keys are now content-addressed per `(order_id, instance)` (see `unit_key`),
+but byte-identical text in *different* cells is still parsed separately. Consider a
+**global** content key for the instance sections (`biopsy`, `aspirate`, `flow`,
+`cell_count`, `immunostains`, `specimen_header`) so byte-identical text anywhere in
+the file is parsed once and fanned out.
 
 **Don't model this on `final_dx`.** `final_dx`'s content key (`order_id`,
 `sha1(text)`) is *not* a general dedup feature — it exists only because `final_dx`
@@ -99,10 +64,15 @@ risks collapsing genuinely different specimens. If duplicates are <1–2%, skip 
 if `specimen_header`/boilerplate shows real repetition, add a global key for just
 those sections.
 
-**Cost:** hashing is negligible (same assessment as content-hash checkpointing
-above). Interacts with that feature — if both land, the key is already content-
-derived, so the global-dedup change is mostly *dropping* the id from the key for the
-chosen sections.
+**Cost:** hashing is negligible (~0.5s for 10k reports, measured). Content-hash
+checkpointing has already landed, so keys are already content-derived — the
+global-dedup change is mostly *dropping* the id from the key for the chosen sections.
+
+**Migration:** this changes the key *format*, which `schema_signature` does not
+fingerprint (it covers field names only). Content-hash checkpointing dodged this
+because no checkpoint existed yet — but if a real production checkpoint exists by the
+time this lands, decide between a sig-bump (fold a `KEY_SCHEME_VERSION` into
+`schema_signature` to auto-purge old records with a warning) or a one-time `--fresh`.
 
 ## Revisit: concurrency, rate-limit ceiling, and 429 visibility
 

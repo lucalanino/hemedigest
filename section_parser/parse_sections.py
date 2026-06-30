@@ -56,9 +56,10 @@ from section_parser.schemas import (
 FINAL_DX_KEY = "final_dx"
 
 # Every section is parsed at the (order_id, instance) grain, in output column
-# order. final_dx is parsed per instance too, but its work units are de-duplicated
-# by text (see final_dx_unit_key) so a diagnosis repeated across a report's
-# instances -- as happens for single-final-diagnosis YH cases -- is only sent once.
+# order. Keys are content-addressed (see unit_key). final_dx is parsed per instance
+# too, but its work units are de-duplicated by text -- omitting instance from the
+# key -- so a diagnosis repeated across a report's instances -- as happens for
+# single-final-diagnosis YH cases -- is only sent once.
 INSTANCE_SECTIONS: dict[str, tuple[type[BaseModel], str]] = {
     "biopsy": (BiopsySchema, prompts.BIOPSY_PROMPT),
     "aspirate": (AspirateSchema, prompts.ASPIRATE_PROMPT),
@@ -374,26 +375,35 @@ class WorkUnit:
 _KEY_SEP = "\x1f"
 
 
-def instance_key(order_id: str, instance: Any, section: str) -> str:
-    return f"{order_id}{_KEY_SEP}{instance}{_KEY_SEP}{section}"
+def _text_digest(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
 
 
-def final_dx_unit_key(order_id: str, text: str) -> str:
-    """Content-addressed key for a final_dx work unit.
+def unit_key(order_id: str, instance: Any, section: str, text: str) -> str:
+    """Content-addressed checkpoint key for one work unit.
 
-    Identical diagnosis text within an order_id collapses to a single key, so the
-    diagnosis is parsed once and fanned back out to every instance that shares it.
+    Every key folds in a hash of the section text, so changed source text yields a
+    new key (auto-reparsed, since it is not in the checkpoint) while unchanged text
+    keeps the same key (skipped). Both call sites -- build_work_units and
+    assemble_rows -- go through this single helper so their keys cannot drift.
+
+    final_dx omits ``instance``: its diagnosis is deduped per report by text, so a
+    diagnosis repeated across a report's instances collapses to one unit. Instance
+    sections keep ``instance`` because each instance carries its own text.
     """
-    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
-    return f"{order_id}{_KEY_SEP}{FINAL_DX_KEY}{_KEY_SEP}{digest}"
+    digest = _text_digest(text)
+    if section == FINAL_DX_KEY:
+        return f"{order_id}{_KEY_SEP}{FINAL_DX_KEY}{_KEY_SEP}{digest}"
+    return f"{order_id}{_KEY_SEP}{instance}{_KEY_SEP}{section}{_KEY_SEP}{digest}"
 
 
 def build_work_units(rows: list[dict[str, Any]], enabled: list[str]) -> list[WorkUnit]:
     """Build one work unit per (order_id, instance, section) with non-empty text,
     limited to the enabled sections.
 
-    final_dx units are keyed by text content rather than instance, so a diagnosis
-    repeated across a report's instances yields a single unit. The shared ``seen``
+    Keys are content-addressed (see ``unit_key``), so changed source text reparses
+    automatically. final_dx is keyed by text without instance, so a diagnosis
+    repeated across a report's instances yields a single unit; the shared ``seen``
     set then drops the duplicates as they recur.
     """
     units: list[WorkUnit] = []
@@ -408,10 +418,7 @@ def build_work_units(rows: list[dict[str, Any]], enabled: list[str]) -> list[Wor
             if not (text and str(text).strip()):
                 continue
             text = str(text)
-            if section == FINAL_DX_KEY:
-                key = final_dx_unit_key(order_id, text)
-            else:
-                key = instance_key(order_id, instance, section)
+            key = unit_key(order_id, instance, section, text)
             if key in seen:
                 continue
             seen.add(key)
@@ -533,13 +540,12 @@ def assemble_rows(
         out: dict[str, Any] = {col: row.get(col) for col in ID_COLUMNS}
 
         for section in instance_sections:
-            if section == FINAL_DX_KEY:
-                text = row.get(FINAL_DX_KEY)
-                if not (text and str(text).strip()):
-                    continue
-                parsed = results.get(final_dx_unit_key(order_id, str(text)))
-            else:
-                parsed = results.get(instance_key(order_id, instance, section))
+            # Same empty-text guard as build_work_units so the key matches the one
+            # the unit was stored under (a drift here would silently miss lookups).
+            text = row.get(section)
+            if not (text and str(text).strip()):
+                continue
+            parsed = results.get(unit_key(order_id, instance, section, str(text)))
             if parsed:
                 for name, value in parsed.items():
                     out[f"{section}_{name}"] = value

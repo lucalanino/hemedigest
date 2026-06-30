@@ -172,8 +172,12 @@ identical diagnosis repeated across a report's instances is parsed only once).
 
 **Resume:** progress is checkpointed to `data/.checkpoint.jsonl` (a stable path, not
 timestamped), so an interrupted run continues where it left off. Failed cells are
-re-queued on the next run; successful parses are not re-done. Use `--fresh` to
-discard the checkpoint and reprocess everything.
+re-queued on the next run; successful parses are not re-done. Checkpoint keys are
+content-addressed (they hash the section text), so if a cell's **source text
+changes**, that cell reparses automatically while unchanged cells stay skipped —
+no `--fresh` needed. Use `--fresh` to discard the checkpoint and reprocess
+everything regardless. Note: this tracks *input text* changes, not *prompt* changes
+— editing a section's prompt does not invalidate its cached cells.
 
 > First-run tip: if `--limit 5` returns all-blank rows with **no** error, the
 > reasoning model likely spent its output budget on reasoning. We deliberately leave
