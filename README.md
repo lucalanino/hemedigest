@@ -180,6 +180,11 @@ every cell separately (change-detection only). Toggling the flag changes the
 checkpoint keys, so it invalidates an existing checkpoint (records re-queue with a
 warning).
 
+Matching is **byte-identical** only: cells differing by trailing whitespace, blank
+lines, or punctuation count as distinct and are parsed separately. This is
+deliberate — there is no normalization pass, since aggressive normalization risks
+collapsing genuinely different specimens.
+
 **Resume:** progress is checkpointed to `data/.checkpoint.jsonl` (a stable path, not
 timestamped), so an interrupted run continues where it left off. Failed cells are
 re-queued on the next run; successful parses are not re-done. Checkpoint keys are

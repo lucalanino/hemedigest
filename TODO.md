@@ -30,41 +30,52 @@ Conclusions from a design discussion — record so we don't re-litigate:
   "Norway problem" (`no`/`yes`/`on`/`off` and unquoted version strings coercing to
   bool/number) — keep quoting stringy scalars.
 
-## Dedup: optional text normalization (near-misses)
+## Logging & observability (design first — gates concurrency tuning)
 
-Global content dedup now collapses **byte-identical** section text (`processing.dedup`,
-keyed `(section, sha1(text))` via `unit_key`). It does *not* catch near-misses that
-differ only by trailing whitespace, blank lines, or punctuation. Could add an
-optional normalization pass before hashing — but only if clearly safe, since
-aggressive normalization risks collapsing genuinely different specimens. Gate on
-seeing real near-miss volume in the dedup summary first.
+Settle *what* the run surfaces and *how* before tuning throughput, because the
+concurrency decision depends on signals we don't currently emit. Discussion item,
+not yet implemented.
 
-## Revisit: concurrency, rate-limit ceiling, and 429 visibility
+**Why this comes first — 429s are nearly invisible today.** A 429
+(`openai.RateLimitError`) is caught by the broad `except Exception` in `run_unit`,
+retried silently with exponential backoff, and only printed
+(`[failed, will retry on rerun]`) if it survives all `max_retries`. Transient 429s
+that succeed on retry produce **no** output, so a quiet console only rules out
+*sustained* throttling, not occasional hits. You can't tune concurrency you can't
+observe.
 
-Picked up but deferred — currently running at `--concurrency 10` as-is. Discuss
-again before tuning for throughput.
+**What to surface (to discuss):**
+- **Retry/429 events** — log `type(exc).__name__` on every retry (a `tqdm.write` in
+  the `except` branch), not just the final failure, so occasional throttling shows.
+- **Rate-limit utilization** — actual RPM/TPM vs. the configured ceilings
+  (`target_rpm` / `target_tpm`), and whether the `RateLimiter` or the
+  `asyncio.Semaphore` is the binding constraint. This is the signal that says whether
+  raising `--concurrency` will actually help.
+- **Throughput** — units/sec, ETA, rolling per-call latency.
+- **Failures** — an end-of-run summary of permanently-failed units and why.
 
-- **Bursty progress is structural, not throttling.** At concurrency 10 the
-  `RateLimiter` (RPM 2500 / TPM 250000) effectively never blocks: 10 in-flight
-  reasoning calls can't approach 2500 RPM (would need ~<0.24s/call). The sole gate
-  is the `asyncio.Semaphore(10)`. `gather` starts the first ~10 together; homogeneous
+**Levels:** consider a `log_level` knob (cf. config-design notes) or
+quiet/normal/verbose — default normal keeps the current tqdm bar + summary; verbose
+adds per-retry and utilization lines; quiet for batch/VM runs.
+
+## Concurrency & rate-limit tuning (after logging)
+
+Depends on the logging above: once 429s and utilization are observable, tune for
+throughput. Currently `--concurrency 20` (config `max_concurrency: 20`).
+
+- **Bursty progress is structural, not throttling.** At concurrency 20 the
+  `RateLimiter` (RPM 2000 / TPM 200000) effectively never blocks: 20 in-flight
+  reasoning calls can't approach 2000 RPM (would need ~<0.6s/call). The sole gate is
+  the `asyncio.Semaphore(20)`. `gather` starts the first ~20 together; homogeneous
   reasoning latency makes them finish together → slots free together → lockstep
   waves. That's the burst.
-- **429s are mostly invisible today.** A 429 (`openai.RateLimitError`) is caught by
-  the broad `except Exception` in `run_unit`, retried silently with exponential
-  backoff, and only printed (`[failed, will retry on rerun]`) if it survives all
-  `max_retries`. Transient 429s that succeed on retry produce **no** console output —
-  so a quiet console only rules out *sustained* throttling, not occasional hits. The
-  backoff sleep correctly runs outside the semaphore (slot released during wait).
 - **No penalty for hitting limits.** A 429 is rejected before processing → zero
-  tokens billed, no account-level consequence/escalation; resets over the sliding
-  window. Response carries `Retry-After`. Only real cost is wasted wall-clock from
-  retries/backoff. Note: current backoff is fixed exponential and does **not** read
+  tokens billed, no account-level consequence; resets over the sliding window.
+  Response carries `Retry-After`. Only real cost is wasted wall-clock from
+  retries/backoff. Current backoff is fixed exponential and does **not** read
   `Retry-After`.
-- **To discuss / possible actions:**
-  - Raise `--concurrency` (10 leaves the 2500 RPM ceiling largely unused; try 40–80)
-    to find the real server ceiling — the first sustained 429s mark it, and that's
-    when the `RateLimiter` finally earns its keep.
-  - Make 429s observable: add a `tqdm.write` in the `except Exception` branch (log
-    `type(exc).__name__`) on every retry, not just the final one.
+- **To discuss / possible actions (once observable):**
+  - Raise `--concurrency` (20 leaves the 2000 RPM ceiling largely unused) to find the
+    real server ceiling — the first sustained 429s mark it, and that's when the
+    `RateLimiter` finally earns its keep.
   - Consider honoring `Retry-After` in the backoff instead of fixed exponential.
