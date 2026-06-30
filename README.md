@@ -127,6 +127,15 @@ JSON-schema keywords are unsupported on **both** surfaces, which is why date fie
 are typed as `str` + a validator rather than `datetime.date` (see
 `section_parser/schemas/specimen_header.py`).
 
+### Model family
+
+This project targets the **gpt-5 reasoning family** (e.g. `gpt-5.4`) only, and that
+assumption is baked in: `reasoning_effort` is sent on every call, and the
+reasoning-vs-output token-budget behavior described in the first-run tip applies only
+to reasoning models. Older / non-reasoning deployments (`gpt-4o`, `gpt-4.1`, etc.)
+are **not supported** — they reject `reasoning_effort`, so point the deployment at a
+gpt-5-family model.
+
 ## Usage
 
 ```bash
@@ -167,9 +176,12 @@ re-queued on the next run; successful parses are not re-done. Use `--fresh` to
 discard the checkpoint and reprocess everything.
 
 > First-run tip: if `--limit 5` returns all-blank rows with **no** error, the
-> reasoning model likely spent its output budget on reasoning. Raise
-> `max_completion_tokens` in `parse_section()` (the single isolated API call in
-> `section_parser/parse_sections.py`).
+> reasoning model likely spent its output budget on reasoning. We deliberately leave
+> the output cap at the SDK default rather than exposing it as a config knob; if you
+> want to tune it, raise `max_completion_tokens` directly in `parse_section()` (the
+> single isolated API call in `section_parser/parse_sections.py`). Note that on a
+> reasoning model this cap covers reasoning **and** visible output together, so it's
+> a lever to raise, not lower.
 
 ## Notes
 

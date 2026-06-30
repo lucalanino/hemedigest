@@ -15,8 +15,10 @@ Conclusions from a design discussion — record so we don't re-litigate:
   overlay — *not* topic-split files, and *not* a separate secrets file.
 - **What belongs in config vs. code.** Test: "does changing this change program
   *logic*, or just a *value*?" Values → config; logic → code.
-  - Config-worthy: connection/runtime knobs (already there), plus
-    `max_completion_tokens` (see below), maybe `log_level`.
+  - Config-worthy: connection/runtime knobs (already there), maybe `log_level`.
+    (`max_completion_tokens` was considered and **deliberately not exposed** — we
+    stick with the SDK default; it's a manual code edit for anyone who wants to
+    tune it, noted as such in the README.)
   - Stay in code: **prompts and schemas** (version-controlled logic; the schema field
     list is coupled to `schema_signature`, the CSV columns, and `ID_COLUMNS` —
     externalizing creates a second source of truth and breaks checkpoint/CSV
@@ -27,20 +29,6 @@ Conclusions from a design discussion — record so we don't re-litigate:
   `safe_load`. TOML is the only real alternative but buys nothing here. Watch the YAML
   "Norway problem" (`no`/`yes`/`on`/`off` and unquoted version strings coercing to
   bool/number) — keep quoting stringy scalars.
-
-## Config: expose `max_completion_tokens`
-
-Make the model output cap configurable instead of relying on the SDK/model default.
-
-- The README first-run tip already tells users to raise `max_completion_tokens` in
-  `parse_section()` when a reasoning model spends its whole budget on reasoning and
-  returns all-blank rows — but it's not currently a knob, so that means editing code.
-- Add e.g. `azure_openai.max_completion_tokens` (nullable → omit the param to use the
-  model default), thread it into the single `client.chat.completions.parse` call in
-  `parse_section`.
-- Doesn't affect the schema signature (output values, not field names), so no
-  `--fresh` needed when changing it.
-- Update the README tip to point at the config key instead of the code.
 
 ## Content-hash checkpointing
 
