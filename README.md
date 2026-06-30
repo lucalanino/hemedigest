@@ -58,43 +58,44 @@ uv export --format requirements-txt --no-hashes --no-emit-project -o requirement
 ## Configuration
 
 Real Azure values are **not** committed — `section_parser/config.yaml` ships with
-placeholders. You can supply the real values either way:
+placeholders. Supply the real values via a **gitignored local overlay**:
 
-### Option A — edit the YAML
+### Local overlay (recommended)
 
-Edit `section_parser/config.yaml` and replace the placeholders:
+Copy the example and fill in your values:
+
+```bash
+cp section_parser/config.local.yaml.example section_parser/config.local.yaml
+```
 
 ```yaml
+# section_parser/config.local.yaml  (gitignored — never committed)
 azure_openai:
   endpoint: "https://<resource>.openai.azure.com/"
   deployment: "<your gpt-5.4 deployment name>"
-  api_version: "2024-12-01-preview"
-  tenant_id: "<your tenant id>"
-  scope: "https://cognitiveservices.azure.com/.default"
+  tenant_id: "<your tenant id>"   # only needed for auth: browser
 ```
 
-### Option B — environment variables (override the YAML; recommended)
+The overlay is deep-merged on top of `config.yaml` at load (overlay wins), so the
+committed file keeps placeholders while real values stay local. Only the keys you
+override need to be present. If you prefer, you can edit `config.yaml` directly
+instead — but then keep it untracked so secrets aren't committed.
 
-If set, these take precedence over the YAML values:
+The run aborts with a clear message if `endpoint` or `deployment` (and `tenant_id`
+when `auth: browser`) is still unset or left as a placeholder.
 
-```bash
-export AZURE_OPENAI_ENDPOINT="https://<resource>.openai.azure.com/"
-export AZURE_OPENAI_DEPLOYMENT="<your gpt-5.4 deployment name>"
-export AZURE_TENANT_ID="<your tenant id>"
-```
+### Authentication
 
-```powershell
-# Windows PowerShell
-$env:AZURE_OPENAI_ENDPOINT = "https://<resource>.openai.azure.com/"
-$env:AZURE_OPENAI_DEPLOYMENT = "<your gpt-5.4 deployment name>"
-$env:AZURE_TENANT_ID = "<your tenant id>"
-```
+Azure AD, no API key. Two strategies, selected by `azure_openai.auth`:
 
-The run aborts with a clear message if `endpoint`, `deployment`, or `tenant_id` is
-still unset or left as a placeholder.
+- **`cli`** (default) — uses your local `az login` session via `AzureCliCredential`.
+  Run `az login` first; `tenant_id` is then optional (taken from the active session).
+- **`browser`** — opens an interactive sign-in window (`InteractiveBrowserCredential`)
+  and requires `tenant_id`. Use it where CLI auth isn't available (e.g. the prod VM,
+  which has no usable CLI credential).
 
-**Authentication** is interactive browser-based Azure AD (no API key); a browser
-window opens on the first call. The token is cached and refreshed for the run.
+Auth is probed once at startup, so a missing `az login` (or a cancelled browser
+sign-in) fails fast with an actionable message instead of stalling mid-run.
 
 ### API surface & version pinning
 

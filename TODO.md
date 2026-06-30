@@ -8,11 +8,11 @@ Conclusions from a design discussion — record so we don't re-litigate:
 
 - **One file, not many.** Keep a single committed `config.yaml`. Splitting only pays
   off with separate audiences or lifecycles, and this is one CLI with one entry
-  point. The only real axis (prod VM vs. local/shared) is already handled by env-var
-  overrides for secrets/connection bits (placeholders committed, no secrets in code).
-  If per-environment drift grows, add an **optional gitignored overlay**
-  (`config.local.yaml`) merged on top at load — *not* topic-split files, and *not* a
-  separate secrets file (env vars already fill that role).
+  point. The only real axis (prod VM vs. local/shared) is handled by the **optional
+  gitignored overlay** `config.local.yaml`, deep-merged on top of `config.yaml` at
+  load (placeholders committed, real values local — no secrets in code). *Done as of
+  the auth change; env-var overrides were removed in its favor.* Keep it to this one
+  overlay — *not* topic-split files, and *not* a separate secrets file.
 - **What belongs in config vs. code.** Test: "does changing this change program
   *logic*, or just a *value*?" Values → config; logic → code.
   - Config-worthy: connection/runtime knobs (already there), plus
@@ -136,22 +136,3 @@ synchronous (sequential) execution path.
 - Keep the checkpoint/resume, CSV assembly, and section-selection behavior identical
   across both modes — only the dispatch loop differs.
 - Decide how `--concurrency` interacts with `sync` (ignore it, or error if both set).
-
-## Config: selectable auth strategy
-
-Make the Azure AD credential type configurable instead of hard-coding
-`InteractiveBrowserCredential` in `build_client`.
-
-- **Why now:** we use the interactive browser fallback only because the prod VM
-  forces it (no API key, no other usable credential there). That's a deployment
-  constraint, not the best experience for everyone else.
-- **For sharing, add `DefaultAzureCredential` as the default/preferred option** — it
-  walks a chain (env vars → managed identity → Azure CLI `az login` → etc.), so most
-  collaborators authenticate with no browser pop-up and no code changes. Keep
-  `InteractiveBrowserCredential` as the explicit opt-in for the VM.
-- Add a config switch, e.g. `azure_openai.auth: default | browser` (default ->
-  `DefaultAzureCredential`, browser -> `InteractiveBrowserCredential`), with an env
-  override.
-- `tenant_id` / `scope` stay as they are; both credential types accept them. Keep
-  the token-provider flow (`get_bearer_token_provider`, no `api_key`) unchanged.
-- Document the choice in the README auth section (when to use which).

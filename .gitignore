@@ -9,5 +9,8 @@ wheels/
 
 legacy-code/
 
+# Local config overlay with real Azure values (endpoint/deployment/tenant) — never commit
+config.local.yaml
+
 # Patient data (PHI) and run outputs — never commit
 data/

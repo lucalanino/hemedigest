@@ -19,7 +19,6 @@ import asyncio
 import csv
 import hashlib
 import json
-import os
 import sys
 import time
 from collections import deque
@@ -28,7 +27,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
-from azure.identity import InteractiveBrowserCredential, get_bearer_token_provider
+from azure.identity import (
+    AzureCliCredential,
+    InteractiveBrowserCredential,
+    get_bearer_token_provider,
+)
 from openai import (
     AsyncAzureOpenAI,
     ContentFilterFinishReasonError,
@@ -81,26 +84,65 @@ def selected_instance_sections(
 # Client configuration ----
 
 
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge ``overlay`` onto ``base`` in place; overlay wins.
+
+    Recurse only when both sides are dicts; lists and scalars are replaced
+    wholesale (so an overlay ``sections:`` list overrides, not appends).
+    """
+    for key, value in overlay.items():
+        if (
+            isinstance(value, dict)
+            and isinstance(base.get(key), dict)
+        ):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def _is_placeholder(value: Any) -> bool:
+    return not value or (isinstance(value, str) and value.startswith("<"))
+
+
 def load_config(config_path: str) -> dict[str, Any]:
-    """Load YAML config and apply environment-variable overrides for secrets."""
+    """Load YAML config, merging an optional gitignored ``*.local.yaml`` overlay.
+
+    Real values (endpoint/deployment/tenant_id) live in the gitignored overlay
+    next to the committed config (``config.yaml`` -> ``config.local.yaml``); the
+    overlay is deep-merged on top so the committed file can keep placeholders.
+    """
     with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    az = config["azure_openai"]
-    # Env vars take precedence; fall back to config; reject leftover placeholders.
-    az["endpoint"] = os.environ.get("AZURE_OPENAI_ENDPOINT", az.get("endpoint", ""))
-    az["deployment"] = os.environ.get(
-        "AZURE_OPENAI_DEPLOYMENT", az.get("deployment", "")
-    )
-    az["tenant_id"] = os.environ.get("AZURE_TENANT_ID", az.get("tenant_id", ""))
+    cfg = Path(config_path)
+    overlay_path = cfg.with_name(f"{cfg.stem}.local{cfg.suffix}")
+    if overlay_path.exists():
+        with open(overlay_path, "r", encoding="utf-8") as f:
+            overlay = yaml.safe_load(f)
+        if isinstance(overlay, dict):
+            _deep_merge(config, overlay)
 
-    for field in ("endpoint", "deployment", "tenant_id"):
-        value = az.get(field, "")
-        if not value or value.startswith("<"):
+    az = config["azure_openai"]
+
+    # Auth strategy: Azure CLI by default (uses the `az login` session); browser
+    # is the explicit opt-in for environments where CLI auth is unavailable.
+    az.setdefault("auth", "cli")
+    if az["auth"] not in {"cli", "browser"}:
+        raise SystemExit(
+            f"Azure config 'auth' must be 'cli' or 'browser'; got {az['auth']!r}."
+        )
+
+    # endpoint/deployment are always required; tenant_id only for browser auth
+    # (CLI auth derives the tenant from the active `az login` session).
+    required = ["endpoint", "deployment"]
+    if az["auth"] == "browser":
+        required.append("tenant_id")
+    for field in required:
+        if _is_placeholder(az.get(field, "")):
             raise SystemExit(
-                f"Azure config '{field}' is unset/placeholder. Set it in the config "
-                f"or via the matching environment variable "
-                f"(AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_DEPLOYMENT / AZURE_TENANT_ID)."
+                f"Azure config '{field}' is unset/placeholder. Set it in "
+                f"'{overlay_path.name}' (gitignored) or '{cfg.name}'."
             )
 
     # gpt-5.x reasoning effort. 'minimal' is unsupported on 5.1+; omit to use the
@@ -134,8 +176,32 @@ def load_config(config_path: str) -> dict[str, Any]:
 
 
 def build_client(az: dict[str, Any]) -> AsyncAzureOpenAI:
-    """Build the async client with interactive browser AD auth"""
-    credential = InteractiveBrowserCredential(tenant_id=az["tenant_id"])
+    """Build the async client using Azure AD auth (CLI by default, browser opt-in)."""
+    tenant_id = az.get("tenant_id", "")
+    has_tenant = not _is_placeholder(tenant_id)
+    if az["auth"] == "browser":
+        credential = InteractiveBrowserCredential(tenant_id=tenant_id)
+    elif has_tenant:
+        credential = AzureCliCredential(tenant_id=tenant_id)
+    else:
+        credential = AzureCliCredential()
+
+    # Credentials authenticate lazily, so without this probe a missing `az login`
+    # would surface only deep inside run_unit's retry loop as a generic
+    # "[failed, will retry]" after a minute of backoff. Fetch a token up front so
+    # auth problems fail fast with an actionable message.
+    try:
+        credential.get_token(az["scope"])
+    except Exception as exc:  # noqa: BLE001 - turn any auth failure into a clear exit
+        hint = (
+            "Run `az login` (and `az account set --subscription ...` if needed)."
+            if az["auth"] == "cli"
+            else "Complete the browser sign-in when prompted."
+        )
+        raise SystemExit(
+            f"Azure authentication failed ({type(exc).__name__}): {exc}\n{hint}"
+        )
+
     token_provider = get_bearer_token_provider(credential, az["scope"])
     return AsyncAzureOpenAI(
         azure_endpoint=az["endpoint"],

@@ -1,5 +1,6 @@
 # Bone marrow section parser config.
-# Values are overridden by env vars, if available
+# Real secrets are NOT committed here -- put them in a gitignored overlay named
+# config.local.yaml (next to this file), which is deep-merged on top at load.
 
 azure_openai:
   endpoint: "<YOUR_AZURE_OPENAI_ENDPOINT>"
@@ -9,6 +10,10 @@ azure_openai:
   api_version: "2024-12-01-preview"
   tenant_id: "<YOUR_TENANT_ID>"
   scope: "https://cognitiveservices.azure.com/.default"
+  # Auth strategy: "cli" uses your `az login` session (default; tenant_id then
+  # optional). "browser" opens an interactive sign-in window and requires
+  # tenant_id -- use it only where CLI auth is unavailable (e.g. the prod VM).
+  auth: "cli"
   # gpt-5.x reasoning effort: none | low | medium | high | xhigh ('minimal' unsupported on 5.1+).
   reasoning_effort: "low"
 
