@@ -298,20 +298,23 @@ def estimate_tokens(system_prompt: str, text: str) -> int:
 # Checkpointing ----
 
 
-def schema_signature(dedup: bool) -> str:
-    """Short fingerprint of the current output schema and key scheme.
+def schema_signature(dedup: bool, reasoning_effort: str, deployment: str) -> str:
+    """Global checkpoint fingerprint: run-wide settings that affect every result.
 
-    Stored on every checkpoint record so a schema change automatically
-    invalidates stale entries instead of silently producing mixed-schema output.
+    Stored on every record; a mismatch purges stale records (with a warning) on
+    load, instead of silently reusing them. Holds only the settings that apply to
+    all sections at once:
 
-    Fingerprints the full canonical schema (all sections), independent of the
-    enabled subset, so toggling which sections to parse does not invalidate
-    checkpoint records for sections that are still enabled. ``dedup`` is folded in
-    because it changes the key scheme: flipping it would otherwise leave orphaned
-    records that silently never match -- this way they purge with a warning.
+    - ``reasoning_effort`` and ``deployment`` -- both change what the model emits;
+    - ``dedup`` -- changes the key scheme (flipping it would otherwise orphan every
+      record).
+
+    Per-section concerns (prompt + schema) are fingerprinted in the work-unit key
+    instead (see ``SECTION_FINGERPRINTS``), so editing one section invalidates only
+    that section rather than the whole checkpoint. Section *selection* affects
+    neither, so toggling which sections to parse never invalidates anything.
     """
-    fields = build_fieldnames(ALL_SECTIONS)
-    payload = f"dedup={dedup}|" + "|".join(fields)
+    payload = f"dedup={dedup}|effort={reasoning_effort}|deployment={deployment}"
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
 
 
@@ -390,29 +393,59 @@ def _text_digest(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
 
 
+def section_fingerprint(schema: type[BaseModel], prompt: str) -> str:
+    """Hash of a section's prompt + full JSON schema.
+
+    The full ``model_json_schema()`` (not just field names) is what the structured-
+    output call sends to the model, so this captures field descriptions, types,
+    enums and constraints as well as names. Folded into the work-unit key so editing
+    one section's prompt or schema invalidates only that section's cached cells.
+
+    Note: this is tied to pydantic's schema serialization, so a pydantic upgrade
+    that changes ``model_json_schema()`` output would flip every fingerprint and
+    force a one-time full reparse (cost, not correctness; ``sort_keys`` already
+    absorbs dict-ordering churn).
+    """
+    schema_json = json.dumps(schema.model_json_schema(), sort_keys=True)
+    payload = f"{prompt}{_KEY_SEP}{schema_json}"
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+
+
+# Per-section (prompt + schema) fingerprints, computed once. Live in the key so a
+# change to one section reparses only that section. Global params that affect every
+# section (reasoning_effort, deployment, dedup) live in schema_signature instead.
+SECTION_FINGERPRINTS: dict[str, str] = {
+    section: section_fingerprint(schema, prompt)
+    for section, (schema, prompt) in INSTANCE_SECTIONS.items()
+}
+
+
 def unit_key(order_id: Any, instance: Any, section: str, text: str, dedup: bool) -> str:
     """Content-addressed checkpoint key for one work unit.
 
-    Every key folds in a hash of the section text, so changed source text yields a
-    new key (auto-reparsed, since it is not in the checkpoint) while unchanged text
-    keeps the same key (skipped). Both call sites -- build_work_units and
-    assemble_rows -- go through this single helper so their keys cannot drift.
+    Every key folds in (a) a hash of the section text and (b) the section's
+    prompt+schema fingerprint, so changed source text *or* a changed prompt/schema
+    yields a new key (auto-reparsed, since it is not in the checkpoint) while
+    everything unchanged keeps the same key (skipped). Both call sites --
+    build_work_units and assemble_rows -- go through this single helper so their
+    keys cannot drift.
 
-    The model output is a pure function of (section prompt, section text) -- no
-    order_id/instance reaches the model -- so the key scheme is the same for every
-    section (no per-section special cases):
+    The model output is a pure function of (section prompt, section schema, section
+    text) -- no order_id/instance reaches the model -- so the key scheme is the same
+    for every section (no per-section special cases):
 
-    - ``dedup`` (default): key is ``(section, hash)``. Byte-identical text anywhere
-      in the file collapses to one unit, parsed once and fanned out. Lossless given
-      context-free prompts. This is also what makes a single diagnosis repeated
-      across a report's instances cost one call.
-    - not ``dedup``: key is ``(order_id, instance, section, hash)``. No collapse;
-      each cell is its own unit (change-detection only).
+    - ``dedup`` (default): key is ``(section, fingerprint, hash)``. Byte-identical
+      text anywhere in the file collapses to one unit, parsed once and fanned out.
+      Lossless given context-free prompts. This is also what makes a single
+      diagnosis repeated across a report's instances cost one call.
+    - not ``dedup``: key is ``(order_id, instance, section, fingerprint, hash)``.
+      No collapse; each cell is its own unit (change-detection only).
     """
+    fp = SECTION_FINGERPRINTS[section]
     digest = _text_digest(text)
     if dedup:
-        return f"{section}{_KEY_SEP}{digest}"
-    return f"{order_id}{_KEY_SEP}{instance}{_KEY_SEP}{section}{_KEY_SEP}{digest}"
+        return f"{section}{_KEY_SEP}{fp}{_KEY_SEP}{digest}"
+    return f"{order_id}{_KEY_SEP}{instance}{_KEY_SEP}{section}{_KEY_SEP}{fp}{_KEY_SEP}{digest}"
 
 
 def build_work_units(
@@ -639,7 +672,7 @@ async def async_main(args: argparse.Namespace) -> None:
         checkpoint_path.unlink()
         print("--fresh: removed existing checkpoint")
 
-    sig = schema_signature(dedup)
+    sig = schema_signature(dedup, az["reasoning_effort"], az["deployment"])
     done = load_checkpoint(checkpoint_path, sig)
     results: dict[str, Optional[dict[str, Any]]] = dict(done)
     pending = [u for u in units if u.key not in done]

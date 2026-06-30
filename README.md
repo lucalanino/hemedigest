@@ -186,11 +186,21 @@ re-queued on the next run; successful parses are not re-done. Checkpoint keys ar
 content-addressed (they hash the section text), so if a cell's **source text
 changes**, that cell reparses automatically while unchanged cells stay skipped —
 no `--fresh` needed. Use `--fresh` to discard the checkpoint and reprocess
-everything regardless. Note: the checkpoint tracks *input text* only — it does **not**
-fingerprint the prompts or `reasoning_effort`, so **after editing a section prompt or
-changing `reasoning_effort` you must run `--fresh`** (otherwise cached cells are
-reused). With dedup on this matters more, since one stale cached result fans out to
-every cell that shares its text.
+everything regardless.
+
+The checkpoint also fingerprints **what produces** each result, so code/config
+changes invalidate the right cells automatically — you generally never need `--fresh`
+for them:
+
+- A section's **prompt and schema** (the schema exactly as sent to the model —
+  field names, types, enums, and any `Field` descriptions) are hashed into that
+  section's keys, so editing one section auto-reparses **only that section**.
+- **`reasoning_effort`** and the **deployment/model** are in the global signature,
+  so changing either auto-reparses **everything** (with the usual stale-record
+  warning).
+
+Not fingerprinted: `api_version` (an API-surface pin that doesn't change extraction)
+and, of course, anything outside the program. `--fresh` remains the manual override.
 
 > First-run tip: if `--limit 5` returns all-blank rows with **no** error, the
 > reasoning model likely spent its output budget on reasoning. We deliberately leave
