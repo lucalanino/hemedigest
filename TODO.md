@@ -120,6 +120,36 @@ above). Interacts with that feature — if both land, the key is already content
 derived, so the global-dedup change is mostly *dropping* the id from the key for the
 chosen sections.
 
+## Revisit: concurrency, rate-limit ceiling, and 429 visibility
+
+Picked up but deferred — currently running at `--concurrency 10` as-is. Discuss
+again before tuning for throughput.
+
+- **Bursty progress is structural, not throttling.** At concurrency 10 the
+  `RateLimiter` (RPM 2500 / TPM 250000) effectively never blocks: 10 in-flight
+  reasoning calls can't approach 2500 RPM (would need ~<0.24s/call). The sole gate
+  is the `asyncio.Semaphore(10)`. `gather` starts the first ~10 together; homogeneous
+  reasoning latency makes them finish together → slots free together → lockstep
+  waves. That's the burst.
+- **429s are mostly invisible today.** A 429 (`openai.RateLimitError`) is caught by
+  the broad `except Exception` in `run_unit`, retried silently with exponential
+  backoff, and only printed (`[failed, will retry on rerun]`) if it survives all
+  `max_retries`. Transient 429s that succeed on retry produce **no** console output —
+  so a quiet console only rules out *sustained* throttling, not occasional hits. The
+  backoff sleep correctly runs outside the semaphore (slot released during wait).
+- **No penalty for hitting limits.** A 429 is rejected before processing → zero
+  tokens billed, no account-level consequence/escalation; resets over the sliding
+  window. Response carries `Retry-After`. Only real cost is wasted wall-clock from
+  retries/backoff. Note: current backoff is fixed exponential and does **not** read
+  `Retry-After`.
+- **To discuss / possible actions:**
+  - Raise `--concurrency` (10 leaves the 2500 RPM ceiling largely unused; try 40–80)
+    to find the real server ceiling — the first sustained 429s mark it, and that's
+    when the `RateLimiter` finally earns its keep.
+  - Make 429s observable: add a `tqdm.write` in the `except Exception` branch (log
+    `type(exc).__name__`) on every retry, not just the final one.
+  - Consider honoring `Retry-After` in the backoff instead of fixed exponential.
+
 ## Config: async vs. no-async execution mode
 
 Expand `config.yaml` to choose between the current async fan-out and a simpler
