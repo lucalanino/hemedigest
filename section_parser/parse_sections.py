@@ -55,11 +55,11 @@ from section_parser.schemas import (
 
 FINAL_DX_KEY = "final_dx"
 
-# Every section is parsed at the (order_id, instance) grain, in output column
-# order. Keys are content-addressed (see unit_key). final_dx is parsed per instance
-# too, but its work units are de-duplicated by text -- omitting instance from the
-# key -- so a diagnosis repeated across a report's instances -- as happens for
-# single-final-diagnosis YH cases -- is only sent once.
+# Every section is emitted at the (order_id, instance) grain, in output column
+# order, and treated uniformly -- no per-section special cases. Work-unit keys are
+# content-addressed (see unit_key): with dedup on (default) byte-identical text
+# anywhere in the file is parsed once and fanned out, which also collapses a single
+# diagnosis repeated across a report's instances down to one call.
 INSTANCE_SECTIONS: dict[str, tuple[type[BaseModel], str]] = {
     "biopsy": (BiopsySchema, prompts.BIOPSY_PROMPT),
     "aspirate": (AspirateSchema, prompts.ASPIRATE_PROMPT),
@@ -173,6 +173,14 @@ def load_config(config_path: str) -> dict[str, Any]:
     if not selected:
         raise SystemExit("Config 'sections' is empty; list at least one section.")
     config["sections"] = selected
+
+    # Global content-dedup: collapse byte-identical section text to one API call.
+    proc = config["processing"]
+    proc.setdefault("dedup", True)
+    if not isinstance(proc["dedup"], bool):
+        raise SystemExit(
+            f"Config 'processing.dedup' must be true or false; got {proc['dedup']!r}."
+        )
     return config
 
 
@@ -290,18 +298,21 @@ def estimate_tokens(system_prompt: str, text: str) -> int:
 # Checkpointing ----
 
 
-def schema_signature() -> str:
-    """Short fingerprint of the current output schema.
+def schema_signature(dedup: bool) -> str:
+    """Short fingerprint of the current output schema and key scheme.
 
     Stored on every checkpoint record so a schema change automatically
     invalidates stale entries instead of silently producing mixed-schema output.
 
     Fingerprints the full canonical schema (all sections), independent of the
     enabled subset, so toggling which sections to parse does not invalidate
-    checkpoint records for sections that are still enabled.
+    checkpoint records for sections that are still enabled. ``dedup`` is folded in
+    because it changes the key scheme: flipping it would otherwise leave orphaned
+    records that silently never match -- this way they purge with a warning.
     """
     fields = build_fieldnames(ALL_SECTIONS)
-    return hashlib.sha1("|".join(fields).encode("utf-8")).hexdigest()[:12]
+    payload = f"dedup={dedup}|" + "|".join(fields)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
 
 
 def load_checkpoint(
@@ -379,7 +390,7 @@ def _text_digest(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
 
 
-def unit_key(order_id: str, instance: Any, section: str, text: str) -> str:
+def unit_key(order_id: Any, instance: Any, section: str, text: str, dedup: bool) -> str:
     """Content-addressed checkpoint key for one work unit.
 
     Every key folds in a hash of the section text, so changed source text yields a
@@ -387,27 +398,36 @@ def unit_key(order_id: str, instance: Any, section: str, text: str) -> str:
     keeps the same key (skipped). Both call sites -- build_work_units and
     assemble_rows -- go through this single helper so their keys cannot drift.
 
-    final_dx omits ``instance``: its diagnosis is deduped per report by text, so a
-    diagnosis repeated across a report's instances collapses to one unit. Instance
-    sections keep ``instance`` because each instance carries its own text.
+    The model output is a pure function of (section prompt, section text) -- no
+    order_id/instance reaches the model -- so the key scheme is the same for every
+    section (no per-section special cases):
+
+    - ``dedup`` (default): key is ``(section, hash)``. Byte-identical text anywhere
+      in the file collapses to one unit, parsed once and fanned out. Lossless given
+      context-free prompts. This is also what makes a single diagnosis repeated
+      across a report's instances cost one call.
+    - not ``dedup``: key is ``(order_id, instance, section, hash)``. No collapse;
+      each cell is its own unit (change-detection only).
     """
     digest = _text_digest(text)
-    if section == FINAL_DX_KEY:
-        return f"{order_id}{_KEY_SEP}{FINAL_DX_KEY}{_KEY_SEP}{digest}"
+    if dedup:
+        return f"{section}{_KEY_SEP}{digest}"
     return f"{order_id}{_KEY_SEP}{instance}{_KEY_SEP}{section}{_KEY_SEP}{digest}"
 
 
-def build_work_units(rows: list[dict[str, Any]], enabled: list[str]) -> list[WorkUnit]:
-    """Build one work unit per (order_id, instance, section) with non-empty text,
-    limited to the enabled sections.
+def build_work_units(
+    rows: list[dict[str, Any]], enabled: list[str], dedup: bool
+) -> tuple[list[WorkUnit], int]:
+    """Build the work units for the enabled sections, one per non-empty cell.
 
-    Keys are content-addressed (see ``unit_key``), so changed source text reparses
-    automatically. final_dx is keyed by text without instance, so a diagnosis
-    repeated across a report's instances yields a single unit; the shared ``seen``
-    set then drops the duplicates as they recur.
+    Keys are content-addressed (see ``unit_key``). With ``dedup`` on, byte-identical
+    text collapses to a single unit via the shared ``seen`` set; with it off, every
+    cell is its own unit. Returns ``(units, n_duplicate_cells)`` where the second
+    value is how many non-empty cells were collapsed away by dedup.
     """
     units: list[WorkUnit] = []
     seen: set[str] = set()
+    n_cells = 0
 
     instance_sections = selected_instance_sections(enabled)
     for row in rows:
@@ -418,13 +438,14 @@ def build_work_units(rows: list[dict[str, Any]], enabled: list[str]) -> list[Wor
             if not (text and str(text).strip()):
                 continue
             text = str(text)
-            key = unit_key(order_id, instance, section, text)
+            n_cells += 1
+            key = unit_key(order_id, instance, section, text, dedup)
             if key in seen:
                 continue
             seen.add(key)
             units.append(WorkUnit(key, schema, prompt, text))
 
-    return units
+    return units, n_cells - len(units)
 
 
 # Run ----
@@ -531,6 +552,7 @@ def assemble_rows(
     rows: list[dict[str, Any]],
     results: dict[str, Optional[dict[str, Any]]],
     enabled: list[str],
+    dedup: bool,
 ) -> list[dict[str, Any]]:
     out_rows: list[dict[str, Any]] = []
     instance_sections = selected_instance_sections(enabled)
@@ -545,7 +567,7 @@ def assemble_rows(
             text = row.get(section)
             if not (text and str(text).strip()):
                 continue
-            parsed = results.get(unit_key(order_id, instance, section, str(text)))
+            parsed = results.get(unit_key(order_id, instance, section, str(text), dedup))
             if parsed:
                 for name, value in parsed.items():
                     out[f"{section}_{name}"] = value
@@ -609,26 +631,33 @@ async def async_main(args: argparse.Namespace) -> None:
         rows = rows[: args.limit]
         print(f"--limit: using first {len(rows)} rows")
 
-    units = build_work_units(rows, sections)
+    dedup = proc["dedup"]
+    units, n_duplicates = build_work_units(rows, sections, dedup)
 
     checkpoint_path = Path(files["checkpoint"])
     if args.fresh and checkpoint_path.exists():
         checkpoint_path.unlink()
         print("--fresh: removed existing checkpoint")
 
-    sig = schema_signature()
+    sig = schema_signature(dedup)
     done = load_checkpoint(checkpoint_path, sig)
     results: dict[str, Optional[dict[str, Any]]] = dict(done)
     pending = [u for u in units if u.key not in done]
 
+    n_cells = len(units) + n_duplicates
     print(f"\n{'=' * 56}")
     print("Processing summary")
     print(f"{'=' * 56}")
     print(f"Input rows (instances):  {len(rows)}")
+    if dedup:
+        pct = (n_duplicates / n_cells * 100) if n_cells else 0.0
+        print(f"Non-empty cells:         {n_cells}")
+        print(f"Duplicate cells merged:  {n_duplicates} ({pct:.1f}%)")
     print(f"Total work units:        {len(units)}")
     print(f"Already done (skipped):  {len(units) - len(pending)}")
     print(f"To process now:          {len(pending)}")
     print(f"Sections:                {', '.join(sections)}")
+    print(f"Dedup:                   {'on (global)' if dedup else 'off'}")
     print(f"Model / deployment:      {az['deployment']}")
     print(f"Reasoning effort:        {az['reasoning_effort']}")
     print(f"Concurrency:             {concurrency}")
@@ -671,7 +700,7 @@ async def async_main(args: argparse.Namespace) -> None:
             checkpoint_writer.close()
             await client.close()
 
-    out_rows = assemble_rows(rows, results, sections)
+    out_rows = assemble_rows(rows, results, sections, dedup)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_path = (
         Path(files["output_dir"]) / f"{files['output_prefix']}_{timestamp}.csv"

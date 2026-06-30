@@ -30,49 +30,14 @@ Conclusions from a design discussion — record so we don't re-litigate:
   "Norway problem" (`no`/`yes`/`on`/`off` and unquoted version strings coercing to
   bool/number) — keep quoting stringy scalars.
 
-## Global dedup for instance text sections (measure first)
+## Dedup: optional text normalization (near-misses)
 
-Instance keys are now content-addressed per `(order_id, instance)` (see `unit_key`),
-but byte-identical text in *different* cells is still parsed separately. Consider a
-**global** content key for the instance sections (`biopsy`, `aspirate`, `flow`,
-`cell_count`, `immunostains`, `specimen_header`) so byte-identical text anywhere in
-the file is parsed once and fanned out.
-
-**Don't model this on `final_dx`.** `final_dx`'s content key (`order_id`,
-`sha1(text)`) is *not* a general dedup feature — it exists only because `final_dx`
-used to be **report-level** (one unit per `order_id`) and was recently made
-per-instance (`738d964`) so consult instances can carry different diagnoses. The
-content key just lets the common single-dx report collapse back to one unit per
-report — i.e. it preserves the old report-level cost while allowing per-instance
-divergence. It pays off because the dx is genuinely repeated verbatim across a
-report's instances.
-
-The instance sections have no such property: they're **per-specimen** — each
-instance carries its own biopsy/aspirate text — so a within-`order_id` content key
-would almost never collide. The only version with upside is a **global** content key
-(no `order_id` at all), collapsing identical text *anywhere* in the file: canned
-boilerplate, "SEE ABOVE" stubs, copy-pasted blocks, repeated `specimen_header`
-outside-institution headers. It's lossless (identical input → identical output, so
-fan-out is safe).
-
-**Gate it on data.** Value depends entirely on how much exact-duplicate text exists,
-and that's unknown. Before writing any code, run a one-off count of byte-identical
-texts per section across `sections.jsonl` (as a % of total work units). Watch for
-near-misses that aren't byte-identical (embedded newlines, trailing whitespace,
-punctuation) — normalize only if it's clearly safe, since aggressive normalization
-risks collapsing genuinely different specimens. If duplicates are <1–2%, skip it;
-if `specimen_header`/boilerplate shows real repetition, add a global key for just
-those sections.
-
-**Cost:** hashing is negligible (~0.5s for 10k reports, measured). Content-hash
-checkpointing has already landed, so keys are already content-derived — the
-global-dedup change is mostly *dropping* the id from the key for the chosen sections.
-
-**Migration:** this changes the key *format*, which `schema_signature` does not
-fingerprint (it covers field names only). Content-hash checkpointing dodged this
-because no checkpoint existed yet — but if a real production checkpoint exists by the
-time this lands, decide between a sig-bump (fold a `KEY_SCHEME_VERSION` into
-`schema_signature` to auto-purge old records with a warning) or a one-time `--fresh`.
+Global content dedup now collapses **byte-identical** section text (`processing.dedup`,
+keyed `(section, sha1(text))` via `unit_key`). It does *not* catch near-misses that
+differ only by trailing whitespace, blank lines, or punctuation. Could add an
+optional normalization pass before hashing — but only if clearly safe, since
+aggressive normalization risks collapsing genuinely different specimens. Gate on
+seeing real near-miss volume in the dedup summary first.
 
 ## Revisit: concurrency, rate-limit ceiling, and 429 visibility
 

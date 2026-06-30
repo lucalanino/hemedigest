@@ -167,8 +167,18 @@ Toggling sections does not invalidate the checkpoint, so you can run a subset an
 more later without re-parsing the sections already done.
 
 **Output:** `data/parsed_sections_<timestamp>.csv` (one row per `(order_id,
-instance)`; `final_dx_category` / `final_dx_status` are per instance, deduped so an
-identical diagnosis repeated across a report's instances is parsed only once).
+instance)`).
+
+**Dedup:** by default (`processing.dedup: true`) the parser content-addresses work
+by section text: **byte-identical text anywhere in the file is parsed once and the
+result fanned out** to every cell that shares it. This is lossless — the model only
+ever sees the section prompt + the section text, so identical input yields the same
+output — and it collapses boilerplate, "SEE ABOVE" stubs, repeated outside-institution
+headers, and a single diagnosis repeated across a report's instances down to one API
+call. The run summary reports how many cells were merged. Set `dedup: false` to parse
+every cell separately (change-detection only). Toggling the flag changes the
+checkpoint keys, so it invalidates an existing checkpoint (records re-queue with a
+warning).
 
 **Resume:** progress is checkpointed to `data/.checkpoint.jsonl` (a stable path, not
 timestamped), so an interrupted run continues where it left off. Failed cells are
@@ -176,8 +186,11 @@ re-queued on the next run; successful parses are not re-done. Checkpoint keys ar
 content-addressed (they hash the section text), so if a cell's **source text
 changes**, that cell reparses automatically while unchanged cells stay skipped —
 no `--fresh` needed. Use `--fresh` to discard the checkpoint and reprocess
-everything regardless. Note: this tracks *input text* changes, not *prompt* changes
-— editing a section's prompt does not invalidate its cached cells.
+everything regardless. Note: the checkpoint tracks *input text* only — it does **not**
+fingerprint the prompts or `reasoning_effort`, so **after editing a section prompt or
+changing `reasoning_effort` you must run `--fresh`** (otherwise cached cells are
+reused). With dedup on this matters more, since one stale cached result fans out to
+every cell that shares its text.
 
 > First-run tip: if `--limit 5` returns all-blank rows with **no** error, the
 > reasoning model likely spent its output budget on reasoning. We deliberately leave

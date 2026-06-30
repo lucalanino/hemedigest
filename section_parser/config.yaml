@@ -42,3 +42,9 @@ processing:
   target_tpm: 200000
   max_retries: 5
   retry_base_delay: 2.0
+  # Global content dedup: parse byte-identical section text once and fan the result
+  # out to every cell that shares it (boilerplate, "SEE ABOVE" stubs, a diagnosis
+  # repeated across a report's instances). Lossless because the model only sees the
+  # section prompt + text. Set false to parse every cell separately. Toggling this
+  # changes checkpoint keys, so old checkpoint records are invalidated on change.
+  dedup: true
