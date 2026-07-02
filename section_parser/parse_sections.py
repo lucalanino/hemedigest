@@ -73,7 +73,11 @@ INSTANCE_SECTIONS: dict[str, tuple[type[BaseModel], str]] = {
 # Every section the parser knows how to handle, in output order.
 ALL_SECTIONS: list[str] = list(INSTANCE_SECTIONS)
 
-ID_COLUMNS = ["order_id", "pat_mrn_id", "description", "specimen_date", "instance"]
+# Passthrough identity columns, carried verbatim from input to output. Names match
+# the input file's column headers exactly (see check_id_columns for the presence
+# guard). ``instance`` is optional; the rest are mandatory.
+ID_COLUMNS = ["order_id", "mrn", "description", "sample_date", "instance"]
+OPTIONAL_ID_COLUMNS = {"instance"}
 
 
 def selected_instance_sections(
@@ -642,6 +646,36 @@ def read_jsonl(path: str) -> list[dict[str, Any]]:
     return rows
 
 
+def check_id_columns(rows: list[dict[str, Any]]) -> None:
+    """Verify the passthrough identity columns are present in the input.
+
+    Presence is judged over the whole file: a column counts as present if any row
+    carries it, so a stray row missing an optional key does not trip the guard.
+    A missing ``instance`` (optional) is a single warning; any missing mandatory
+    column aborts before we spend a cent on the model.
+    """
+    if not rows:
+        return
+    present = set().union(*(row.keys() for row in rows))
+    missing = [col for col in ID_COLUMNS if col not in present]
+    missing_required = [col for col in missing if col not in OPTIONAL_ID_COLUMNS]
+    missing_optional = [col for col in missing if col in OPTIONAL_ID_COLUMNS]
+
+    for col in missing_optional:
+        print(
+            f"WARNING: optional column '{col}' is absent from the input; it will be "
+            f"emitted empty. Continuing."
+        )
+    if missing_required:
+        cols = ", ".join(f"'{c}'" for c in missing_required)
+        raise SystemExit(
+            "ERROR: the input is missing mandatory identity column(s): "
+            f"{cols}. These are carried verbatim into every output row, so parsing "
+            "cannot proceed without them. Check that the input column headers match "
+            f"the expected names ({', '.join(ID_COLUMNS)}) and re-run."
+        )
+
+
 async def async_main(args: argparse.Namespace) -> None:
     config = load_config(args.config)
     az = config["azure_openai"]
@@ -663,6 +697,8 @@ async def async_main(args: argparse.Namespace) -> None:
             raise SystemExit("--limit must be >= 0")
         rows = rows[: args.limit]
         print(f"--limit: using first {len(rows)} rows")
+
+    check_id_columns(rows)
 
     dedup = proc["dedup"]
     units, n_duplicates = build_work_units(rows, sections, dedup)
