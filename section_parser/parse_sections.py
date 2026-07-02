@@ -22,6 +22,7 @@ import json
 import sys
 import time
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -36,11 +37,20 @@ from openai import (
     AsyncAzureOpenAI,
     ContentFilterFinishReasonError,
     LengthFinishReasonError,
+    RateLimitError,
 )
 from pydantic import BaseModel
 from tqdm import tqdm
 
 from section_parser import prompts
+from section_parser.runlog import (
+    RunStats,
+    format_run_report,
+    get_logger,
+    setup_logging,
+)
+
+logger = get_logger()
 from section_parser.schemas import (
     AspirateSchema,
     BiopsySchema,
@@ -78,6 +88,21 @@ ALL_SECTIONS: list[str] = list(INSTANCE_SECTIONS)
 # guard). ``instance`` is optional; the rest are mandatory.
 ID_COLUMNS = ["order_id", "mrn", "description", "sample_date", "instance"]
 OPTIONAL_ID_COLUMNS = {"instance"}
+
+# Cell values treated as empty: skipped (never sent to the model, so they cost
+# nothing) and emitted blank in the CSV. JSON null and whitespace-only are always
+# empty; in addition these placeholder tokens are, matched case-insensitively on the
+# *whole* stripped cell (so real text containing "na" mid-sentence is untouched).
+# Kept in code, not config: it's an internal normalization mechanic (see TODO.md).
+EMPTY_SENTINELS = {"na", "n/a", "none", "nil", "null", "-", "--", "."}
+
+
+def is_empty_cell(value: Any) -> bool:
+    """True if a section cell carries no parseable content (null/blank/placeholder)."""
+    if value is None:
+        return True
+    stripped = str(value).strip()
+    return not stripped or stripped.lower() in EMPTY_SENTINELS
 
 
 def selected_instance_sections(
@@ -185,6 +210,17 @@ def load_config(config_path: str) -> dict[str, Any]:
         raise SystemExit(
             f"Config 'processing.dedup' must be true or false; got {proc['dedup']!r}."
         )
+
+    # Default console log level (CLI --log-level/--quiet override at runtime).
+    proc.setdefault("log_level", "WARNING")
+    level = str(proc["log_level"]).upper()
+    valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+    if level not in valid_levels:
+        raise SystemExit(
+            f"Config 'processing.log_level' must be one of {sorted(valid_levels)}; "
+            f"got {proc['log_level']!r}."
+        )
+    proc["log_level"] = level
     return config
 
 
@@ -230,6 +266,21 @@ def build_client(az: dict[str, Any]) -> AsyncAzureOpenAI:
 # Model call ----
 
 
+@dataclass
+class CallOutcome:
+    """Result of one model call.
+
+    ``refused`` distinguishes a model refusal (a recorded null we want to *count* as
+    such) from a genuine parsed result; ``tokens`` is the *actual* usage reported by
+    the API (0 if the API omitted it) so the run report can show achieved TPM vs the
+    target instead of guessing from the estimate.
+    """
+
+    parsed: Optional[BaseModel]
+    refused: bool
+    tokens: int
+
+
 async def parse_section(
     client: AsyncAzureOpenAI,
     deployment: str,
@@ -237,8 +288,8 @@ async def parse_section(
     text: str,
     schema: type[BaseModel],
     reasoning_effort: str,
-) -> Optional[BaseModel]:
-    """Run one structured-output call"""
+) -> CallOutcome:
+    """Run one structured-output call, returning the parse plus refusal/usage metadata."""
     completion = await client.chat.completions.parse(
         model=deployment,
         messages=[
@@ -248,17 +299,35 @@ async def parse_section(
         response_format=schema,
         reasoning_effort=reasoning_effort,
     )
+    usage = getattr(completion, "usage", None)
+    tokens = getattr(usage, "total_tokens", 0) or 0
     message = completion.choices[0].message
     if getattr(message, "refusal", None):
-        return None
-    return message.parsed
+        return CallOutcome(parsed=None, refused=True, tokens=tokens)
+    return CallOutcome(parsed=message.parsed, refused=False, tokens=tokens)
 
 
 # Rate limiting ----
 
 
 class RateLimiter:
-    """Bounds concurrency and paces requests/tokens against sliding 60s windows."""
+    """Two distinct throttles, both needed (see run_unit for how they compose):
+
+    - ``sem`` (semaphore) caps *in-flight* requests -- it protects the connection
+      pool / memory. Each reasoning call runs tens of seconds, so RPM pacing alone
+      would let in-flight requests balloon into the hundreds.
+    - the sliding 60s RPM/TPM windows pace the *start rate* against the Azure quota.
+
+    ``acquire`` is deliberately called *inside* the semaphore and right before the
+    call, so a request is counted against the window at the moment it actually goes
+    out. Reserving rate budget earlier (e.g. before waiting for a slot) would let the
+    window run ahead of reality, releasing a burst later -> overshoot -> more 429s.
+    Keep this order.
+
+    The blocked_* / *_blocks counters are read only by the end-of-run report to show
+    whether the local limiter (vs the semaphore or server 429s) is the binding
+    constraint; they never gate behavior.
+    """
 
     def __init__(self, max_concurrency: int, target_rpm: int, target_tpm: int):
         self.sem = asyncio.Semaphore(max_concurrency)
@@ -267,6 +336,11 @@ class RateLimiter:
         self._requests: deque[float] = deque()
         self._tokens: deque[tuple[float, int]] = deque()
         self._lock = asyncio.Lock()
+        # Observability only (report), not control:
+        self.blocked_events = 0  # acquires that had to wait at least once
+        self.blocked_seconds = 0.0  # total wall time spent waiting in acquire
+        self.rpm_blocks = 0  # times the RPM predicate tripped
+        self.tpm_blocks = 0  # times the TPM predicate tripped
 
     def _purge(self, now: float) -> None:
         cutoff = now - 60.0
@@ -279,18 +353,28 @@ class RateLimiter:
         """Block until issuing a request with ``est_tokens`` stays within limits."""
         # Clamp so an oversized request still passes an empty window (no infinite spin).
         est_tokens = min(est_tokens, self.target_tpm)
+        wait_start: Optional[float] = None
         while True:
             async with self._lock:
                 now = time.monotonic()
                 self._purge(now)
                 tok_sum = sum(t for _, t in self._tokens)
-                if (
-                    len(self._requests) < self.target_rpm
-                    and tok_sum + est_tokens <= self.target_tpm
-                ):
+                rpm_ok = len(self._requests) < self.target_rpm
+                tpm_ok = tok_sum + est_tokens <= self.target_tpm
+                if rpm_ok and tpm_ok:
                     self._requests.append(now)
                     self._tokens.append((now, est_tokens))
+                    if wait_start is not None:
+                        self.blocked_events += 1
+                        self.blocked_seconds += now - wait_start
                     return
+                # Record which ceiling forced the wait (both may trip at once).
+                if not rpm_ok:
+                    self.rpm_blocks += 1
+                if not tpm_ok:
+                    self.tpm_blocks += 1
+                if wait_start is None:
+                    wait_start = now
             await asyncio.sleep(0.5)
 
 
@@ -351,9 +435,10 @@ def load_checkpoint(
                 continue
             done[key] = record.get("result")
     if stale:
-        print(
-            f"WARNING: ignored {stale} checkpoint record(s) from a different schema "
-            f"version; those units will be re-processed. Use --fresh to start clean."
+        logger.warning(
+            "ignored %d checkpoint record(s) from a different schema version; those "
+            "units will be re-processed. Use --fresh to start clean.",
+            stale,
         )
     return done
 
@@ -454,17 +539,22 @@ def unit_key(order_id: Any, instance: Any, section: str, text: str, dedup: bool)
 
 def build_work_units(
     rows: list[dict[str, Any]], enabled: list[str], dedup: bool
-) -> tuple[list[WorkUnit], int]:
+) -> tuple[list[WorkUnit], int, int]:
     """Build the work units for the enabled sections, one per non-empty cell.
 
     Keys are content-addressed (see ``unit_key``). With ``dedup`` on, byte-identical
     text collapses to a single unit via the shared ``seen`` set; with it off, every
-    cell is its own unit. Returns ``(units, n_duplicate_cells)`` where the second
-    value is how many non-empty cells were collapsed away by dedup.
+    cell is its own unit. Cells that ``is_empty_cell`` flags (null/blank/placeholder)
+    are skipped -- they never become a unit, so they cost no API call.
+
+    Returns ``(units, n_duplicate_cells, n_skipped_empty)``: how many non-empty cells
+    were collapsed away by dedup, and how many non-null cells were dropped as
+    placeholder/empty (JSON nulls are not counted -- they were never content).
     """
     units: list[WorkUnit] = []
     seen: set[str] = set()
     n_cells = 0
+    n_skipped_empty = 0
 
     instance_sections = selected_instance_sections(enabled)
     for row in rows:
@@ -472,7 +562,11 @@ def build_work_units(
         instance = row.get("instance")
         for section, (schema, prompt) in instance_sections.items():
             text = row.get(section)
-            if not (text and str(text).strip()):
+            if is_empty_cell(text):
+                # Count only non-null placeholders ("NA", ".", ...); a JSON null
+                # section was never content, so it is not a "skipped" cell.
+                if text is not None and str(text).strip():
+                    n_skipped_empty += 1
                 continue
             text = str(text)
             n_cells += 1
@@ -482,7 +576,7 @@ def build_work_units(
             seen.add(key)
             units.append(WorkUnit(key, schema, prompt, text))
 
-    return units, n_cells - len(units)
+    return units, n_cells - len(units), n_skipped_empty
 
 
 # Run ----
@@ -495,6 +589,7 @@ async def run_unit(
     limiter: RateLimiter,
     checkpoint: CheckpointWriter,
     results: dict[str, Optional[dict[str, Any]]],
+    stats: RunStats,
     max_retries: int,
     retry_base_delay: float,
     reasoning_effort: str,
@@ -512,8 +607,14 @@ async def run_unit(
         async with limiter.sem:
             # Re-acquire per attempt so retried calls also count against RPM/TPM.
             await limiter.acquire(est)
+            stats.calls += 1
+            # In-flight gauge measured here, not from the semaphore (whose occupancy
+            # includes tasks parked in acquire). Decrement in finally: the excepts
+            # below are inside this block, so a decrement after the await would be
+            # skipped on the 429/retry path and leak the gauge past max_concurrency.
+            stats.note_inflight_start()
             try:
-                parsed = await parse_section(
+                outcome = await parse_section(
                     client,
                     deployment,
                     unit.prompt,
@@ -521,20 +622,77 @@ async def run_unit(
                     unit.schema,
                     reasoning_effort,
                 )
-                result = parsed.model_dump() if parsed is not None else None
+                stats.actual_tokens += outcome.tokens
+                result = (
+                    outcome.parsed.model_dump() if outcome.parsed is not None else None
+                )
+                if outcome.refused:
+                    stats.refusals += 1
+                    logger.debug("[refusal, recorded null] %s", unit.key)
+                else:
+                    stats.parsed_ok += 1
                 checkpoint_it = True
                 break
-            except (LengthFinishReasonError, ContentFilterFinishReasonError) as exc:
+            except LengthFinishReasonError:
                 # Deterministic -- retrying repeats it; record a permanent null.
-                tqdm.write(
-                    f"[non-retryable, recorded as null] {unit.key}: {type(exc).__name__}"
+                stats.length_nulls += 1
+                logger.debug(
+                    "[non-retryable, recorded null] %s: LengthFinishReasonError",
+                    unit.key,
                 )
                 checkpoint_it = True
                 break
-            except Exception as exc:  # noqa: BLE001 - continue-on-error by design
+            except ContentFilterFinishReasonError:
+                stats.content_filter_nulls += 1
+                logger.debug(
+                    "[non-retryable, recorded null] %s: ContentFilterFinishReasonError",
+                    unit.key,
+                )
+                checkpoint_it = True
+                break
+            except RateLimitError as exc:
+                # Server throttling (429). Rare/actionable -> WARNING so occasional
+                # throttling is visible even at the default level, not just when it
+                # exhausts every retry.
+                stats.http_429 += 1
+                retry_after = _retry_after(exc)
                 if attempt >= max_retries:
-                    tqdm.write(f"[failed, will retry on rerun] {unit.key}: {exc}")
+                    stats.exhausted_failures += 1
+                    logger.error(
+                        "[429 exhausted, will retry on rerun] %s (attempt %d/%d)",
+                        unit.key,
+                        attempt + 1,
+                        max_retries + 1,
+                    )
                     break
+                stats.retries += 1
+                logger.warning(
+                    "[429, backing off] %s (attempt %d/%d)%s",
+                    unit.key,
+                    attempt + 1,
+                    max_retries + 1,
+                    f", Retry-After={retry_after}" if retry_after else "",
+                )
+            except Exception as exc:  # noqa: BLE001 - continue-on-error by design
+                stats.other_retryable += 1
+                if attempt >= max_retries:
+                    stats.exhausted_failures += 1
+                    logger.error(
+                        "[failed, will retry on rerun] %s: %s",
+                        unit.key,
+                        type(exc).__name__,
+                    )
+                    break
+                stats.retries += 1
+                logger.debug(
+                    "[retryable error] %s: %s (attempt %d/%d)",
+                    unit.key,
+                    type(exc).__name__,
+                    attempt + 1,
+                    max_retries + 1,
+                )
+            finally:
+                stats.note_inflight_end()
         # Reached only on a retryable, non-final failure (all other paths break).
         await asyncio.sleep(retry_base_delay * (2**attempt))
 
@@ -544,9 +702,21 @@ async def run_unit(
     pbar.update(1)
 
 
+def _retry_after(exc: RateLimitError) -> Optional[str]:
+    """The server's Retry-After header if present (logged, not yet honored)."""
+    resp = getattr(exc, "response", None)
+    if resp is None:
+        return None
+    try:
+        return resp.headers.get("retry-after")
+    except Exception:  # noqa: BLE001 - header access is best-effort
+        return None
+
+
 async def process(
     units: list[WorkUnit],
     results: dict[str, Optional[dict[str, Any]]],
+    stats: RunStats,
     client: AsyncAzureOpenAI,
     deployment: str,
     limiter: RateLimiter,
@@ -565,6 +735,7 @@ async def process(
                     limiter,
                     checkpoint,
                     results,
+                    stats,
                     max_retries,
                     retry_base_delay,
                     reasoning_effort,
@@ -599,10 +770,11 @@ def assemble_rows(
         out: dict[str, Any] = {col: row.get(col) for col in ID_COLUMNS}
 
         for section in instance_sections:
-            # Same empty-text guard as build_work_units so the key matches the one
-            # the unit was stored under (a drift here would silently miss lookups).
+            # Same empty-cell guard as build_work_units (shared is_empty_cell) so the
+            # key matches the one the unit was stored under -- a drift here would
+            # silently miss lookups, and placeholder cells stay blank in the output.
             text = row.get(section)
-            if not (text and str(text).strip()):
+            if is_empty_cell(text):
                 continue
             parsed = results.get(unit_key(order_id, instance, section, str(text), dedup))
             if parsed:
@@ -640,9 +812,9 @@ def read_jsonl(path: str) -> list[dict[str, Any]]:
                 rows.append(json.loads(line))
             except json.JSONDecodeError as exc:
                 bad += 1
-                print(f"WARNING: skipping malformed JSON on line {lineno}: {exc}")
+                logger.warning("skipping malformed JSON on line %d: %s", lineno, exc)
     if bad:
-        print(f"WARNING: skipped {bad} malformed line(s) in {path}")
+        logger.warning("skipped %d malformed line(s) in %s", bad, path)
     return rows
 
 
@@ -662,9 +834,10 @@ def check_id_columns(rows: list[dict[str, Any]]) -> None:
     missing_optional = [col for col in missing if col in OPTIONAL_ID_COLUMNS]
 
     for col in missing_optional:
-        print(
-            f"WARNING: optional column '{col}' is absent from the input; it will be "
-            f"emitted empty. Continuing."
+        logger.warning(
+            "optional column '%s' is absent from the input; it will be emitted "
+            "empty. Continuing.",
+            col,
         )
     if missing_required:
         cols = ", ".join(f"'{c}'" for c in missing_required)
@@ -682,6 +855,10 @@ async def async_main(args: argparse.Namespace) -> None:
     proc = config["processing"]
     files = config["files"]
     sections = config["sections"]
+
+    # CLI wins over config: --quiet -> ERROR, then --log-level, else config default.
+    log_level = "ERROR" if args.quiet else (args.log_level or proc["log_level"])
+    setup_logging(log_level, args.log_file)
 
     concurrency = (
         args.concurrency if args.concurrency is not None else proc["max_concurrency"]
@@ -701,7 +878,7 @@ async def async_main(args: argparse.Namespace) -> None:
     check_id_columns(rows)
 
     dedup = proc["dedup"]
-    units, n_duplicates = build_work_units(rows, sections, dedup)
+    units, n_duplicates, n_skipped_empty = build_work_units(rows, sections, dedup)
 
     checkpoint_path = Path(files["checkpoint"])
     if args.fresh and checkpoint_path.exists():
@@ -722,6 +899,7 @@ async def async_main(args: argparse.Namespace) -> None:
         pct = (n_duplicates / n_cells * 100) if n_cells else 0.0
         print(f"Non-empty cells:         {n_cells}")
         print(f"Duplicate cells merged:  {n_duplicates} ({pct:.1f}%)")
+    print(f"Skipped empty/NA cells:  {n_skipped_empty}")
     print(f"Total work units:        {len(units)}")
     print(f"Already done (skipped):  {len(units) - len(pending)}")
     print(f"To process now:          {len(pending)}")
@@ -753,10 +931,13 @@ async def async_main(args: argparse.Namespace) -> None:
         client = build_client(az)
         limiter = RateLimiter(concurrency, proc["target_rpm"], proc["target_tpm"])
         checkpoint_writer = CheckpointWriter(checkpoint_path, sig)
+        stats = RunStats()
+        start = time.monotonic()
         try:
             await process(
                 pending,
                 results,
+                stats,
                 client,
                 az["deployment"],
                 limiter,
@@ -768,6 +949,20 @@ async def async_main(args: argparse.Namespace) -> None:
         finally:
             checkpoint_writer.close()
             await client.close()
+        # End-of-run report: outcomes, throughput, and which limit is binding.
+        # Printed (not logged) so it always shows regardless of console log level.
+        print(
+            "\n"
+            + format_run_report(
+                stats,
+                limiter,
+                time.monotonic() - start,
+                concurrency,
+                proc["target_rpm"],
+                proc["target_tpm"],
+                n_skipped_empty,
+            )
+        )
 
     out_rows = assemble_rows(rows, results, sections, dedup)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -798,6 +993,22 @@ def main() -> None:
     )
     parser.add_argument(
         "--yes", action="store_true", help="Skip the confirmation prompt"
+    )
+    parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default=None,
+        help="Console log level (overrides config; default WARNING)",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Only log errors (shortcut for --log-level ERROR)",
+    )
+    parser.add_argument(
+        "--log-file",
+        default=None,
+        help="Also append metadata-only logs (no report text) to this file",
     )
     args = parser.parse_args()
 

@@ -30,18 +30,22 @@ Clinical scope is myeloid neoplasms and ALL.
 
 ## Installation
 
-### Development (uv)
+Requires Python 3.12. Two interchangeable ways to install — pick whichever fits the
+machine; both produce the same pinned dependency set.
+
+### uv (recommended)
 
 ```bash
 uv sync
 ```
 
-This creates `.venv` and installs all dependencies from `pyproject.toml` /
-`uv.lock`. Run commands with `uv run` (see Usage).
+Creates `.venv` and installs the exact versions from `pyproject.toml` / `uv.lock`.
+Prefix commands with `uv run` (see [Usage](#usage)).
 
-### Production VM (pip, no uv)
+### pip
 
-A pinned `requirements.txt` is committed at the repo root. Clone the repo, then:
+A pinned `requirements.txt` is committed at the repo root (generated from the same
+lockfile), so no uv is needed:
 
 ```bash
 python -m venv .venv
@@ -49,9 +53,11 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Regenerate `requirements.txt` after any dependency change:
+After any dependency change, refresh the lockfile and the exported `requirements.txt`
+so the two installs stay in sync:
 
 ```bash
+uv lock
 uv export --format requirements-txt --no-hashes --no-emit-project -o requirements.txt
 ```
 
@@ -136,6 +142,109 @@ to reasoning models. Older / non-reasoning deployments (`gpt-4o`, `gpt-4.1`, etc
 are **not supported** — they reject `reasoning_effort`, so point the deployment at a
 gpt-5-family model.
 
+### Runtime knobs
+
+Non-secret settings live in the committed `section_parser/config.yaml` (all
+overridable through the local overlay). Three blocks:
+
+```yaml
+files:                      # input/output paths
+  input_jsonl: "data/sections.jsonl"
+  output_dir: "data"
+  output_prefix: "parsed"
+  checkpoint: "data/.checkpoint.jsonl"
+
+sections:                   # which sections to parse/emit (omit block = all)
+  - biopsy
+  # ... see "Section selection" under Usage
+
+processing:
+  max_concurrency: 20       # in-flight request cap (the semaphore); --concurrency overrides
+  target_rpm: 2000          # client-side requests-per-minute ceiling
+  target_tpm: 200000        # client-side tokens-per-minute ceiling
+  max_retries: 5            # retry attempts per work unit before it's re-queued next run
+  retry_base_delay: 2.0     # exponential backoff base (seconds): delay = base * 2**attempt
+  dedup: true               # parse byte-identical section text once, fan the result out
+  log_level: "WARNING"      # console verbosity; --log-level / --quiet override
+```
+
+`max_concurrency`, `target_rpm`, and `target_tpm` are the throughput knobs — see
+[Concurrency & the semaphore](#concurrency--the-semaphore) for how they compose and how
+to tune them from the run report. `log_level` is covered under
+[Logging & the run report](#logging--the-run-report); `dedup` under Usage.
+
+## Concurrency & the semaphore
+
+The parser fans every pending work unit out at once with `asyncio.gather`, and gates
+them with **two independent throttles** (`RateLimiter` in `parse_sections.py`). They do
+different jobs, and you need both:
+
+- **The semaphore (`max_concurrency`)** caps how many requests are *in flight at once*.
+  It protects the connection pool and memory. A gpt-5 reasoning call runs for tens of
+  seconds, so rate pacing alone would let in-flight requests pile up into the hundreds
+  before the first ones return — the semaphore is what stops that.
+- **The sliding-window RPM/TPM limiter (`target_rpm` / `target_tpm`)** paces the
+  *start rate* of new requests against your Azure deployment quota, over rolling 60-second
+  windows. Tokens are estimated (~chars/4 + headroom) before the call.
+
+**Why the ordering matters (and why it looks the way it does).** Each attempt takes a
+semaphore slot *first*, then asks the limiter for rate budget *right before* the call
+goes out. That's deliberate: reserving rate budget earlier — before a slot is free —
+would let the 60s window fill up with requests that only actually leave later, in a
+burst. The window would run ahead of reality, overshoot the real quota, and draw *more*
+429s. Counting the request at the moment it's sent keeps the window honest. This is the
+one non-obvious bit of the design; it's documented in the `RateLimiter` docstring so it
+doesn't get "cleaned up" into a regression.
+
+**Which knob to turn.** At the default settings the semaphore (20) is usually the
+binding constraint — 20 in-flight reasoning calls come nowhere near 2000 RPM, so the
+limiter rarely blocks. The end-of-run [run report](#logging--the-run-report) measures
+this for you and prints a verdict:
+
+- *semaphore binding* (peak in-flight pinned at `max_concurrency`, limiter idle) → raise
+  `--concurrency` / `max_concurrency` to go faster;
+- *rate limiter binding* (requests spending real time blocked, split RPM vs TPM) → raise
+  the offending target if your quota allows;
+- *server throttling* (429s returned) → you're past the real ceiling; lower the targets
+  or concurrency. 429s are retried with exponential backoff; the server's `Retry-After`
+  is logged but not yet honored (backoff is fixed exponential).
+
+## Logging & the run report
+
+Logging uses the stdlib `logging` module through a tqdm-safe handler (log lines never
+corrupt the progress bar). Configure it with `processing.log_level` or the CLI flags
+(`--log-level`, `--quiet`, `--log-file`); the CLI wins.
+
+**Default (`WARNING`) is quiet on purpose** — you get the progress bar, plus only the
+events that need attention as they happen: HTTP 429s (with the `Retry-After` the server
+asked for) and exhausted-retry failures. This is the key fix over the old behavior,
+where a transient 429 was retried silently and left no trace, so you couldn't tell you
+were being throttled. Drop to `--log-level DEBUG` to also see every retry and each
+refusal / recorded-null.
+
+**PHI-safe by construction.** Log records only ever contain content-hash work-unit keys,
+exception *type names*, and numbers — **never report text, MRNs, or cell content**, and
+that holds even when an underlying exception's message is chatty (only its class name is
+logged). `--log-file PATH` inherits the same guarantee (it creates the parent directory
+and always records at DEBUG regardless of console level), so it's safe to keep on
+long-running / prod-VM runs.
+
+**The run report** prints at the end of every run that processed anything (always shown,
+regardless of log level) and is the tool for tuning the knobs above:
+
+- **Outcomes** — parsed OK · refusals · length-truncated nulls · content-filtered nulls ·
+  failures (re-queued for next run) · cells skipped as empty/`NA`.
+- **Throughput** — achieved RPM/TPM (whole-run average) vs. your targets, plus *actual*
+  token usage from the API so TPM tuning isn't a guess. On short runs the average can
+  read above target — the limiter only bounds any rolling 60s window, not a brief burst.
+- **Limits** — peak in-flight vs. `max_concurrency`, how long requests waited on the local
+  limiter (split RPM vs TPM), server 429 count — ending in the one-line verdict described
+  in [Concurrency & the semaphore](#concurrency--the-semaphore).
+
+Empty and placeholder cells (`null`, whitespace, or a sentinel like `NA` / `N/A` /
+`None` / `.`) are skipped entirely — never sent to the model, so they cost nothing — and
+the count is shown both before the confirmation prompt and in the run report.
+
 ## Usage
 
 ```bash
@@ -157,6 +266,13 @@ Flags:
 | `--concurrency N` | override max in-flight requests |
 | `--yes` | skip the confirmation prompt |
 | `--config PATH` | use a different config file |
+| `--log-level LEVEL` | console log level: `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL` (overrides `processing.log_level`) |
+| `--quiet` | only log errors (shortcut for `--log-level ERROR`) |
+| `--log-file PATH` | also append **metadata-only** logs to a file (never report text) |
+
+Concurrency behavior and the throughput knobs are covered under
+[Concurrency & the semaphore](#concurrency--the-semaphore); the logging flags and the
+end-of-run run report under [Logging & the run report](#logging--the-run-report).
 
 **Section selection:** the `sections` list in `section_parser/config.yaml` controls
 which sections are parsed and emitted, even when the input file contains all of them.
@@ -218,5 +334,7 @@ and, of course, anything outside the program. `--fresh` remains the manual overr
 ## Notes
 
 - `data/` is gitignored — it holds PHI and run artifacts and must never be committed.
-- Rate limiting is gentle by default (config `processing`: concurrency 8, targets
-  2000 RPM / 200k TPM against the 2500 / 250k deployment limits), with 429 backoff.
+- Rate limiting is gentle by default (config `processing`: `max_concurrency: 20`,
+  `target_rpm: 2000` / `target_tpm: 200000` against ~2500 / 250k deployment limits), with
+  exponential 429 backoff. See [Concurrency & the semaphore](#concurrency--the-semaphore)
+  for how to tune these from the run report.
