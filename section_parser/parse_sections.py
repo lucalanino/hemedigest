@@ -703,14 +703,27 @@ async def run_unit(
 
 
 def _retry_after(exc: RateLimitError) -> Optional[str]:
-    """The server's Retry-After header if present (logged, not yet honored)."""
+    """The server's requested retry delay, if present (logged, not yet honored).
+
+    Prefers the millisecond-precision ``retry-after-ms`` header (which Azure OpenAI
+    commonly returns) over the standard integer-seconds ``retry-after``. Returned as
+    a raw display string with its unit (e.g. ``"1500ms"`` or ``"3s"``) so the log
+    shows which header the server actually sent, not a normalized guess.
+    """
     resp = getattr(exc, "response", None)
     if resp is None:
         return None
     try:
-        return resp.headers.get("retry-after")
+        headers = resp.headers
     except Exception:  # noqa: BLE001 - header access is best-effort
         return None
+    ms = headers.get("retry-after-ms")
+    if ms is not None:
+        return f"{ms}ms"
+    secs = headers.get("retry-after")
+    if secs is not None:
+        return f"{secs}s"
+    return None
 
 
 async def process(
