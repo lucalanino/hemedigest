@@ -59,7 +59,9 @@ def setup_logging(level: str, log_file: str | None = None) -> logging.Logger:
         logger.removeHandler(handler)
         handler.close()
 
-    fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S"
+    )
 
     console = TqdmLoggingHandler()
     console.setLevel(getattr(logging, level))
@@ -155,10 +157,14 @@ def format_run_report(
     lines.append(f"  Calls made:            {stats.calls}")
     lines.append(f"  Achieved RPM (avg):    {achieved_rpm:.0f} / {target_rpm} target")
     lines.append(f"  Achieved TPM (avg):    {achieved_tpm:.0f} / {target_tpm} target")
-    lines.append(f"  Actual tokens total:   {stats.actual_tokens} (~{avg_tokens:.0f}/call)")
+    lines.append(
+        f"  Actual tokens total:   {stats.actual_tokens} (~{avg_tokens:.0f}/call)"
+    )
 
     lines.append("Limits")
-    lines.append(f"  Peak in-flight:        {stats.peak_inflight} / {max_concurrency} max")
+    lines.append(
+        f"  Peak in-flight:        {stats.peak_inflight} / {max_concurrency} max"
+    )
     lines.append(
         f"  Rate-limiter blocks:   {limiter.blocked_events} "
         f"(rpm {limiter.rpm_blocks}, tpm {limiter.tpm_blocks}), "

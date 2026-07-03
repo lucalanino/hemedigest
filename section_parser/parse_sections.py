@@ -111,6 +111,7 @@ def selected_instance_sections(
     """Instance-level sections to parse, preserving canonical order."""
     return {k: v for k, v in INSTANCE_SECTIONS.items() if k in enabled}
 
+
 # Client configuration ----
 
 
@@ -121,10 +122,7 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]
     wholesale (so an overlay ``sections:`` list overrides, not appends).
     """
     for key, value in overlay.items():
-        if (
-            isinstance(value, dict)
-            and isinstance(base.get(key), dict)
-        ):
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
             _deep_merge(base[key], value)
         else:
             base[key] = value
@@ -789,7 +787,9 @@ def assemble_rows(
             text = row.get(section)
             if is_empty_cell(text):
                 continue
-            parsed = results.get(unit_key(order_id, instance, section, str(text), dedup))
+            parsed = results.get(
+                unit_key(order_id, instance, section, str(text), dedup)
+            )
             if parsed:
                 for name, value in parsed.items():
                     out[f"{section}_{name}"] = value
