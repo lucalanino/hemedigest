@@ -58,8 +58,12 @@ so the two installs stay in sync:
 
 ```bash
 uv lock
-uv export --format requirements-txt --no-hashes --no-emit-project -o requirements.txt
+uv export --format requirements-txt --no-hashes --no-emit-project --no-dev -o requirements.txt
 ```
+
+Dev-only tools (e.g. `ruff` for formatting) live in `[dependency-groups].dev` — add
+them with `uv add --dev <pkg>` and run via `uv run`. `--no-dev` keeps them out of the
+exported `requirements.txt`, so the prod VM never installs them.
 
 ## Configuration
 
