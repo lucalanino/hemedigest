@@ -115,41 +115,29 @@ def selected_instance_sections(
 # Client configuration ----
 
 
-def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
-    """Recursively merge ``overlay`` onto ``base`` in place; overlay wins.
-
-    Recurse only when both sides are dicts; lists and scalars are replaced
-    wholesale (so an overlay ``sections:`` list overrides, not appends).
-    """
-    for key, value in overlay.items():
-        if isinstance(value, dict) and isinstance(base.get(key), dict):
-            _deep_merge(base[key], value)
-        else:
-            base[key] = value
-    return base
-
-
 def _is_placeholder(value: Any) -> bool:
-    return not value or (isinstance(value, str) and value.startswith("<"))
+    # "<" anywhere (not just a leading "<") so a half-edited placeholder like
+    # "https://<resource>.openai.azure.com/" (the example file's literal text)
+    # is still caught, not just a bare "<YOUR_...>" token.
+    return not value or (isinstance(value, str) and "<" in value)
 
 
 def load_config(config_path: str) -> dict[str, Any]:
-    """Load YAML config, merging an optional gitignored ``*.local.yaml`` overlay.
+    """Load the YAML config.
 
-    Real values (endpoint/deployment/tenant_id) live in the gitignored overlay
-    next to the committed config (``config.yaml`` -> ``config.local.yaml``); the
-    overlay is deep-merged on top so the committed file can keep placeholders.
+    ``config_path`` is gitignored (see ``config.yaml.example`` for the template
+    and required keys) so real Azure values never get committed; there is no
+    overlay/merge step, it's a single file.
     """
+    cfg = Path(config_path)
+    if not cfg.exists():
+        example = cfg.parent / f"{cfg.name}.example"
+        raise SystemExit(
+            f"Config file not found at '{config_path}'. Copy '{example.name}' to "
+            f"'{cfg.name}' and fill in your real Azure values."
+        )
     with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
-
-    cfg = Path(config_path)
-    overlay_path = cfg.with_name(f"{cfg.stem}.local{cfg.suffix}")
-    if overlay_path.exists():
-        with open(overlay_path, "r", encoding="utf-8") as f:
-            overlay = yaml.safe_load(f)
-        if isinstance(overlay, dict):
-            _deep_merge(config, overlay)
 
     az = config["azure_openai"]
 
@@ -169,8 +157,8 @@ def load_config(config_path: str) -> dict[str, Any]:
     for field in required:
         if _is_placeholder(az.get(field, "")):
             raise SystemExit(
-                f"Azure config '{field}' is unset/placeholder. Set it in "
-                f"'{overlay_path.name}' (gitignored) or '{cfg.name}'."
+                f"Azure config '{field}' is unset/placeholder in '{cfg.name}'. "
+                "Fill in your real value (see config.yaml.example)."
             )
 
     # gpt-5.x reasoning effort. 'minimal' is unsupported on 5.1+; omit to use the

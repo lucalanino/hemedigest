@@ -4,9 +4,12 @@ Backlog of ideas to revisit. Not scheduled — captured so we don't lose them.
 
 ## Config design decisions (settled — don't re-litigate)
 
-- **One committed `config.yaml` + optional gitignored `config.local.yaml` overlay**
-  (deep-merged; placeholders committed, real values local). Not topic-split files, not a
-  separate secrets file. Env-var overrides were removed in favor of the overlay.
+- **Single gitignored `config.yaml` + committed `config.yaml.example` template**
+  (2026-07-06: replaced the earlier committed-`config.yaml`-plus-`config.local.yaml`-
+  overlay design — deep merge was more indirection than the secret-protection problem
+  needed). `config.yaml` is created by copying the example once; no merge step, no second
+  source of truth for a given key. Not topic-split files, not a separate secrets file.
+  Env-var overrides were removed earlier in favor of this file-based approach.
 - **Config vs. code:** values → config (connection/runtime knobs, `log_level`); logic →
   code. Prompts and schemas stay in code — coupled to `schema_signature` / CSV columns /
   `ID_COLUMNS`, so externalizing them creates a second source of truth. Same for internal

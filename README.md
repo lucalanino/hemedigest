@@ -67,32 +67,23 @@ exported `requirements.txt`, so the prod VM never installs them.
 
 ## Configuration
 
-Real Azure values are **not** committed — `section_parser/config.yaml` ships with
-placeholders. Supply the real values via a **gitignored local overlay**:
+`section_parser/config.yaml` holds all runtime settings, including real Azure
+values, and is **gitignored** — it's never committed. Only the placeholder
+template, `section_parser/config.yaml.example`, is tracked in git.
 
-### Local overlay (recommended)
-
-Copy the example and fill in your values:
+Copy the template and fill in your real values:
 
 ```bash
-cp section_parser/config.local.yaml.example section_parser/config.local.yaml
+cp section_parser/config.yaml.example section_parser/config.yaml
 ```
 
-```yaml
-# section_parser/config.local.yaml  (gitignored — never committed)
-azure_openai:
-  endpoint: "https://<resource>.openai.azure.com/"
-  deployment: "<your gpt-5.4 deployment name>"
-  tenant_id: "<your tenant id>"   # only needed for auth: browser
-```
+Then edit `azure_openai.endpoint` / `azure_openai.deployment` (and
+`azure_openai.tenant_id` if `auth: browser`) in `section_parser/config.yaml` —
+everything else in the template is already a sensible default (see
+[Runtime knobs](#runtime-knobs) below).
 
-The overlay is deep-merged on top of `config.yaml` at load (overlay wins), so the
-committed file keeps placeholders while real values stay local. Only the keys you
-override need to be present. If you prefer, you can edit `config.yaml` directly
-instead — but then keep it untracked so secrets aren't committed.
-
-The run aborts with a clear message if `endpoint` or `deployment` (and `tenant_id`
-when `auth: browser`) is still unset or left as a placeholder.
+The run aborts with a clear message if `config.yaml` is missing entirely, or if
+`endpoint`/`deployment`/`tenant_id` is still unset or left as a placeholder.
 
 ### Authentication
 
@@ -148,8 +139,8 @@ gpt-5-family model.
 
 ### Runtime knobs
 
-Non-secret settings live in the committed `section_parser/config.yaml` (all
-overridable through the local overlay). Three blocks:
+All runtime settings live in `section_parser/config.yaml` (see
+[Configuration](#configuration) above for how to create it). Three blocks:
 
 ```yaml
 files:                      # input/output paths

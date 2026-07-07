@@ -1,6 +1,6 @@
 __pycache__/
 *.py[oc]
 .venv
-config.local.yaml
+config.yaml
 data/
 .ruff_cache/

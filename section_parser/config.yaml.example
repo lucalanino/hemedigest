@@ -1,6 +1,7 @@
-# Bone marrow section parser config.
-# Real secrets are NOT committed here -- put them in a gitignored overlay named
-# config.local.yaml (next to this file), which is deep-merged on top at load.
+# Bone marrow section parser config template.
+# Copy this file to `config.yaml` (gitignored, next to this file) and fill in
+# your real Azure values below. `config.yaml` is never committed -- this
+# `.example` file, with placeholders, is the only version tracked in git.
 
 azure_openai:
   endpoint: "<YOUR_AZURE_OPENAI_ENDPOINT>"
