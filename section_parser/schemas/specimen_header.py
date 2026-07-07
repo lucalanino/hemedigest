@@ -1,10 +1,4 @@
-"""Specimen header section schema.
-
-The consult specimen header is free-text boilerplate (referring institution name,
-alphanumeric accession/identifier strings, and other clutter). The only field we
-want from it is the date the outside specimen was collected/reported, normalized
-to ISO format.
-"""
+"""Specimen header section schema: extracts the date from an otherwise boilerplate free-text header."""
 
 import re
 from typing import Optional
@@ -15,18 +9,7 @@ _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 class SpecimenHeaderSchema(BaseModel):
-    """Date extracted from the consult specimen header.
-
-    The date is typed as ``str`` (not ``datetime.date``) on purpose. A ``date``
-    field would (1) render in the JSON schema as ``{"type": "string", "format":
-    "date"}``, and strict structured outputs does not support ``format`` -- the
-    API may reject the schema; and (2) make Pydantic *raise* on any non-ISO model
-    output, which inside ``client.chat.completions.parse`` surfaces as an
-    exception that burns the retry budget before settling on null. Keeping it a
-    plain string + a soft ``field_validator`` gives the same "ISO date or null"
-    result while staying API-compatible and degrading gracefully (validator
-    returns None instead of raising).
-    """
+    """Date extracted from the consult specimen header, kept as ``str`` since structured outputs rejects ``format`` and a ``date`` field would raise (not null) on bad model output."""
 
     date: Optional[str] = Field(
         None,
@@ -45,8 +28,7 @@ class SpecimenHeaderSchema(BaseModel):
     @field_validator("date")
     @classmethod
     def _coerce_iso(cls, v: Optional[str]) -> Optional[str]:
-        # Defensive: drop anything that isn't a clean ISO date so a stray free-text
-        # value never lands in the output column.
+        # drop anything that isn't a clean ISO date
         if v is None:
             return None
         v = v.strip()

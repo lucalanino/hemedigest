@@ -1,10 +1,5 @@
-"""System prompts for each report section, paired with schemas in parse_sections.py.
+"""System prompts for each report section, paired with schemas in parse_sections.py."""
 
-Field-level rules live in the schema field descriptions; these prompts set the
-overall task and cross-cutting policy.
-"""
-
-# Shared policy prepended to every instance-level section prompt.
 _COMMON_POLICY = """\
 You extract structured data from a single section of a bone marrow pathology \
 report. The clinical scope is MYELOID NEOPLASMS and ACUTE LYMPHOBLASTIC LEUKEMIA (ALL).

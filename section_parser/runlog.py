@@ -1,19 +1,6 @@
 """Run-time logging, stats, and the end-of-run report for the section parser.
 
-PHI discipline (non-negotiable): the input is bone-marrow pathology text with MRNs.
-Nothing here ever logs report text, cell content, MRNs, or order identifiers -- only
-content-hash work-unit keys, exception *type names*, and numeric metadata. The optional
-``--log-file`` inherits the same rule: it holds error metadata, never source content.
-
-Three pieces live here to keep ``parse_sections.py`` readable:
-
-- ``TqdmLoggingHandler`` -- routes log records through ``tqdm.write`` so an active
-  progress bar is never corrupted by an interleaved log line.
-- ``setup_logging`` -- configures the ``section_parser`` logger (tqdm-safe console at
-  the chosen level; optional append-mode file that always captures DEBUG).
-- ``RunStats`` + ``format_run_report`` -- the counters accumulated during a run and the
-  human-readable summary that tells the user which limit (semaphore / rate limiter /
-  server 429s) is binding, so they can set the concurrency knobs.
+PHI discipline: never log report text, cell content, MRNs, or order identifiers -- only content-hash keys, exception type names, and numeric metadata.
 """
 
 from __future__ import annotations
@@ -26,7 +13,6 @@ from tqdm import tqdm
 
 LOGGER_NAME = "section_parser"
 
-# Console default; file handler (if any) always captures DEBUG regardless.
 _VALID_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
 
@@ -40,20 +26,14 @@ class TqdmLoggingHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             tqdm.write(self.format(record))
-        except Exception:  # noqa: BLE001 - never let logging crash the run
+        except Exception:  # noqa: BLE001
             self.handleError(record)
 
 
 def setup_logging(level: str, log_file: str | None = None) -> logging.Logger:
-    """Configure and return the ``section_parser`` logger.
-
-    ``level`` gates the console (tqdm-safe) handler. When ``log_file`` is set an
-    append-mode file handler is added that always records DEBUG, so a quiet console
-    (WARNING) run still leaves a full metadata trail on disk. Idempotent: existing
-    handlers are cleared so a re-run in the same process does not double-log.
-    """
+    """Configure and return the ``section_parser`` logger; idempotent across re-runs in the same process."""
     logger = get_logger()
-    logger.setLevel(logging.DEBUG)  # let each handler do its own filtering
+    logger.setLevel(logging.DEBUG)  # let each handler filter independently
     logger.propagate = False
     for handler in list(logger.handlers):
         logger.removeHandler(handler)
@@ -80,12 +60,7 @@ def setup_logging(level: str, log_file: str | None = None) -> logging.Logger:
 
 @dataclass
 class RunStats:
-    """Counters accumulated across the run.
-
-    No lock: asyncio is single-threaded and every mutation happens between awaits
-    (the in-flight gauge in particular is incremented and its peak captured with no
-    await in between), so plain ``+= 1`` is atomic here.
-    """
+    """Counters accumulated across the run; no lock needed since asyncio is single-threaded."""
 
     parsed_ok: int = 0
     refusals: int = 0
@@ -97,9 +72,7 @@ class RunStats:
     other_retryable: int = 0
     actual_tokens: int = 0
     calls: int = 0
-    # In-flight gauge, measured at the call site (not the semaphore, whose occupancy
-    # includes tasks parked in RateLimiter.acquire and so overstates in-flight work).
-    inflight: int = 0
+    inflight: int = 0  # measured at the call site, not the semaphore (which overstates in-flight work)
     peak_inflight: int = 0
 
     def note_inflight_start(self) -> None:
@@ -124,11 +97,7 @@ def format_run_report(
     target_tpm: int,
     skipped_empty: int,
 ) -> str:
-    """Build the end-of-run report: outcomes, throughput, and the binding constraint.
-
-    ``limiter`` is the ``RateLimiter`` (read for its blocked_* / *_blocks counters).
-    Printed rather than logged so it always shows regardless of console log level.
-    """
+    """Build the end-of-run report: outcomes, throughput, and the binding constraint."""
     achieved_rpm = _rate(stats.calls, elapsed)
     achieved_tpm = _rate(stats.actual_tokens, elapsed)
     avg_tokens = (stats.actual_tokens / stats.calls) if stats.calls else 0

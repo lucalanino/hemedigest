@@ -1,22 +1,13 @@
-# Bone marrow section parser config template.
-# Copy this file to `config.yaml` (gitignored, next to this file) and fill in
-# your real Azure values below. `config.yaml` is never committed -- this
-# `.example` file, with placeholders, is the only version tracked in git.
+# Copy to `config.yaml` (gitignored) and fill in your real Azure values.
 
 azure_openai:
   endpoint: "<YOUR_AZURE_OPENAI_ENDPOINT>"
   deployment: "<YOUR_DEPLOYMENT>"
-  # Pinned to the classic dated-api surface for prod stability; portable to the
-  # v1 API where available. See README "API surface & version pinning".
-  api_version: "2024-12-01-preview"
+  api_version: "2024-12-01-preview"  # pinned dated-api surface; see README "API surface & version pinning"
   tenant_id: "<YOUR_TENANT_ID>"
   scope: "https://cognitiveservices.azure.com/.default"
-  # Auth strategy: "cli" uses your `az login` session (default; tenant_id then
-  # optional). "browser" opens an interactive sign-in window and requires
-  # tenant_id -- use it only where CLI auth is unavailable (e.g. the prod VM).
-  auth: "cli"
-  # gpt-5.x reasoning effort: none | low | medium | high | xhigh ('minimal' unsupported on 5.1+).
-  reasoning_effort: "low"
+  auth: "cli"  # "cli" uses `az login` (tenant_id optional); "browser" requires tenant_id
+  reasoning_effort: "low"  # gpt-5.x: none | low | medium | high | xhigh
 
 files:
   input_jsonl: "data/sections.jsonl"
@@ -24,10 +15,7 @@ files:
   output_prefix: "parsed_sections"
   checkpoint: "data/.checkpoint.jsonl"
 
-# Which sections to parse. The input file may contain all sections; only the
-# ones listed here are parsed and emitted as columns. Comment out or remove a
-# section to skip it. Valid: biopsy, aspirate, flow, cell_count, immunostains,
-# specimen_header, final_dx. Omit this block entirely to parse all sections.
+# Omit this block to parse all sections; otherwise list the subset to parse/emit.
 sections:
   - biopsy
   - aspirate
@@ -43,13 +31,5 @@ processing:
   target_tpm: 200000
   max_retries: 5
   retry_base_delay: 2.0
-  # Console log level: DEBUG | INFO | WARNING | ERROR | CRITICAL. Default WARNING keeps
-  # the run quiet -- progress bar + 429s/failures + the end-of-run report -- while DEBUG
-  # adds per-retry and refusal/recorded-null detail. CLI --log-level / --quiet override.
-  log_level: "WARNING"
-  # Global content dedup: parse byte-identical section text once and fan the result
-  # out to every cell that shares it (boilerplate, "SEE ABOVE" stubs, a diagnosis
-  # repeated across a report's instances). Lossless because the model only sees the
-  # section prompt + text. Set false to parse every cell separately. Toggling this
-  # changes checkpoint keys, so old checkpoint records are invalidated on change.
-  dedup: true
+  log_level: "WARNING"  # DEBUG | INFO | WARNING | ERROR | CRITICAL; CLI --log-level/--quiet override
+  dedup: true  # parse byte-identical section text once and fan out the result; toggling invalidates checkpoint

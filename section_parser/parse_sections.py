@@ -1,11 +1,4 @@
-"""Parse bone marrow report sections via Azure OpenAI structured outputs.
-
-Reads a .jsonl file formatted as one specimen instance per line, parses each
-non-null section with its own schema + system prompt, and writes one flat,
-timestamped CSV.
-
-Auth is interactive browser-based Azure AD. Calls run concurrently with gentle
-rate limiting, and progress is checkpointed so an interrupted run can resume.
+"""Parse bone marrow report sections via Azure OpenAI structured outputs into one flat, checkpointed CSV.
 
 Usage:
     python -m section_parser.parse_sections [--config PATH] [--limit N]
@@ -49,8 +42,6 @@ from section_parser.runlog import (
     get_logger,
     setup_logging,
 )
-
-logger = get_logger()
 from section_parser.schemas import (
     AspirateSchema,
     BiopsySchema,
@@ -61,15 +52,10 @@ from section_parser.schemas import (
     SpecimenHeaderSchema,
 )
 
-# Report sections configuration ----
+logger = get_logger()
 
 FINAL_DX_KEY = "final_dx"
 
-# Every section is emitted at the (order_id, instance) grain, in output column
-# order, and treated uniformly -- no per-section special cases. Work-unit keys are
-# content-addressed (see unit_key): with dedup on (default) byte-identical text
-# anywhere in the file is parsed once and fanned out, which also collapses a single
-# diagnosis repeated across a report's instances down to one call.
 INSTANCE_SECTIONS: dict[str, tuple[type[BaseModel], str]] = {
     "biopsy": (BiopsySchema, prompts.BIOPSY_PROMPT),
     "aspirate": (AspirateSchema, prompts.ASPIRATE_PROMPT),
@@ -80,25 +66,19 @@ INSTANCE_SECTIONS: dict[str, tuple[type[BaseModel], str]] = {
     FINAL_DX_KEY: (FinalDxSchema, prompts.FINAL_DX_PROMPT),
 }
 
-# Every section the parser knows how to handle, in output order.
+# All sections the parser knows how to handle, in output order.
 ALL_SECTIONS: list[str] = list(INSTANCE_SECTIONS)
 
-# Passthrough identity columns, carried verbatim from input to output. Names match
-# the input file's column headers exactly (see check_id_columns for the presence
-# guard). ``instance`` is optional; the rest are mandatory.
+# Passthrough identity columns, carried verbatim from input to output; must match input headers.
 ID_COLUMNS = ["order_id", "mrn", "description", "sample_date", "instance"]
 OPTIONAL_ID_COLUMNS = {"instance"}
 
-# Cell values treated as empty: skipped (never sent to the model, so they cost
-# nothing) and emitted blank in the CSV. JSON null and whitespace-only are always
-# empty; in addition these placeholder tokens are, matched case-insensitively on the
-# *whole* stripped cell (so real text containing "na" mid-sentence is untouched).
-# Kept in code, not config: it's an internal normalization mechanic (see TODO.md).
+# Placeholder tokens treated as empty, matched case-insensitively on the whole stripped cell.
 EMPTY_SENTINELS = {"na", "n/a", "none", "nil", "null", "-", "--", "."}
 
 
 def is_empty_cell(value: Any) -> bool:
-    """True if a section cell carries no parseable content (null/blank/placeholder)."""
+    """True if a cell carries no parseable content (null/blank/placeholder)."""
     if value is None:
         return True
     stripped = str(value).strip()
@@ -112,23 +92,13 @@ def selected_instance_sections(
     return {k: v for k, v in INSTANCE_SECTIONS.items() if k in enabled}
 
 
-# Client configuration ----
-
-
 def _is_placeholder(value: Any) -> bool:
-    # "<" anywhere (not just a leading "<") so a half-edited placeholder like
-    # "https://<resource>.openai.azure.com/" (the example file's literal text)
-    # is still caught, not just a bare "<YOUR_...>" token.
+    """A "<" anywhere catches half-edited values like "https://<resource>...", not just "<YOUR_...>"."""
     return not value or (isinstance(value, str) and "<" in value)
 
 
 def load_config(config_path: str) -> dict[str, Any]:
-    """Load the YAML config.
-
-    ``config_path`` is gitignored (see ``config.yaml.example`` for the template
-    and required keys) so real Azure values never get committed; there is no
-    overlay/merge step, it's a single file.
-    """
+    """Load the YAML config (gitignored; see config.yaml.example for the template)."""
     cfg = Path(config_path)
     if not cfg.exists():
         example = cfg.parent / f"{cfg.name}.example"
@@ -141,16 +111,13 @@ def load_config(config_path: str) -> dict[str, Any]:
 
     az = config["azure_openai"]
 
-    # Auth strategy: Azure CLI by default (uses the `az login` session); browser
-    # is the explicit opt-in for environments where CLI auth is unavailable.
     az.setdefault("auth", "cli")
     if az["auth"] not in {"cli", "browser"}:
         raise SystemExit(
             f"Azure config 'auth' must be 'cli' or 'browser'; got {az['auth']!r}."
         )
 
-    # endpoint/deployment are always required; tenant_id only for browser auth
-    # (CLI auth derives the tenant from the active `az login` session).
+    # tenant_id is only required for browser auth; CLI auth derives it from `az login`.
     required = ["endpoint", "deployment"]
     if az["auth"] == "browser":
         required.append("tenant_id")
@@ -161,8 +128,6 @@ def load_config(config_path: str) -> dict[str, Any]:
                 "Fill in your real value (see config.yaml.example)."
             )
 
-    # gpt-5.x reasoning effort. 'minimal' is unsupported on 5.1+; omit to use the
-    # model default. Validate early so a typo fails before any API call.
     az.setdefault("reasoning_effort", "low")
     valid_efforts = {"none", "minimal", "low", "medium", "high", "xhigh"}
     if az["reasoning_effort"] not in valid_efforts:
@@ -171,8 +136,7 @@ def load_config(config_path: str) -> dict[str, Any]:
             f"got {az['reasoning_effort']!r}."
         )
 
-    # Section selection: omitted -> parse all; otherwise parse the listed subset,
-    # de-duplicated and re-ordered to the canonical ALL_SECTIONS order.
+    # Omitted -> parse all; otherwise parse the listed subset, in canonical order.
     sections = config.get("sections")
     if sections is None:
         sections = list(ALL_SECTIONS)
@@ -189,18 +153,14 @@ def load_config(config_path: str) -> dict[str, Any]:
         raise SystemExit("Config 'sections' is empty; list at least one section.")
     config["sections"] = selected
 
-    # Throughput/retry knobs. Defaulted + validated so a hand-edited config
-    # missing/mistyping one fails fast with a clear message. This matters more
-    # than a typical range check: max_concurrency/target_rpm/target_tpm=0 don't
-    # error at all, they hang silently (asyncio.Semaphore(0) never admits a task;
-    # RateLimiter.acquire's `< target_rpm` check is always false) -- the exact
-    # failure mode this codebase has already paid down elsewhere (see
-    # build_client's token probe, max_retries=0 on the SDK client).
+    # Validated because 0 wouldn't error, it'd hang silently (empty semaphore / always-false rate check).
     proc = config.get("processing")
     if proc is None:
         proc = {}
     elif not isinstance(proc, dict):
-        raise SystemExit("Config 'processing' must be a mapping of settings, not a list/scalar.")
+        raise SystemExit(
+            "Config 'processing' must be a mapping of settings, not a list/scalar."
+        )
     config["processing"] = proc
     proc.setdefault("max_concurrency", 20)
     proc.setdefault("target_rpm", 2000)
@@ -210,8 +170,7 @@ def load_config(config_path: str) -> dict[str, Any]:
 
     for field in ("max_concurrency", "target_rpm", "target_tpm"):
         v = proc[field]
-        # bool is an int subclass in Python, so exclude it explicitly -- otherwise
-        # a typo like `max_concurrency: true` would silently pass as 1.
+        # bool is an int subclass in Python, so exclude it or `true` would silently pass as 1.
         if isinstance(v, bool) or not isinstance(v, int) or v < 1:
             raise SystemExit(
                 f"Config 'processing.{field}' must be a positive integer; got {v!r}."
@@ -230,14 +189,12 @@ def load_config(config_path: str) -> dict[str, Any]:
             f"got {v!r}."
         )
 
-    # Global content-dedup: collapse byte-identical section text to one API call.
     proc.setdefault("dedup", True)
     if not isinstance(proc["dedup"], bool):
         raise SystemExit(
             f"Config 'processing.dedup' must be true or false; got {proc['dedup']!r}."
         )
 
-    # Default console log level (CLI --log-level/--quiet override at runtime).
     proc.setdefault("log_level", "WARNING")
     level = str(proc["log_level"]).upper()
     valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
@@ -261,13 +218,10 @@ def build_client(az: dict[str, Any]) -> AsyncAzureOpenAI:
     else:
         credential = AzureCliCredential()
 
-    # Credentials authenticate lazily, so without this probe a missing `az login`
-    # would surface only deep inside run_unit's retry loop as a generic
-    # "[failed, will retry]" after a minute of backoff. Fetch a token up front so
-    # auth problems fail fast with an actionable message.
+    # Fetch a token up front so a missing `az login` fails fast, not deep inside run_unit's retry loop.
     try:
         credential.get_token(az["scope"])
-    except Exception as exc:  # noqa: BLE001 - turn any auth failure into a clear exit
+    except Exception as exc:  # noqa: BLE001
         hint = (
             "Run `az login` (and `az account set --subscription ...` if needed)."
             if az["auth"] == "cli"
@@ -282,25 +236,13 @@ def build_client(az: dict[str, Any]) -> AsyncAzureOpenAI:
         azure_endpoint=az["endpoint"],
         azure_ad_token_provider=token_provider,
         api_version=az["api_version"],
-        # No SDK-level retries: run_unit already retries with backoff. Stacking
-        # the SDK's silent retries on top turned a failing call into a multi-minute
-        # apparent hang, so we let our own loop own retry/backoff.
-        max_retries=0,
+        max_retries=0,  # run_unit owns retry/backoff; stacking the SDK's own retries caused multi-minute hangs
     )
-
-
-# Model call ----
 
 
 @dataclass
 class CallOutcome:
-    """Result of one model call.
-
-    ``refused`` distinguishes a model refusal (a recorded null we want to *count* as
-    such) from a genuine parsed result; ``tokens`` is the *actual* usage reported by
-    the API (0 if the API omitted it) so the run report can show achieved TPM vs the
-    target instead of guessing from the estimate.
-    """
+    """Result of one model call: parsed value, whether it was a refusal, and actual token usage."""
 
     parsed: Optional[BaseModel]
     refused: bool
@@ -315,7 +257,7 @@ async def parse_section(
     schema: type[BaseModel],
     reasoning_effort: str,
 ) -> CallOutcome:
-    """Run one structured-output call, returning the parse plus refusal/usage metadata."""
+    """Run one structured-output call."""
     completion = await client.chat.completions.parse(
         model=deployment,
         messages=[
@@ -333,27 +275,8 @@ async def parse_section(
     return CallOutcome(parsed=message.parsed, refused=False, tokens=tokens)
 
 
-# Rate limiting ----
-
-
 class RateLimiter:
-    """Two distinct throttles, both needed (see run_unit for how they compose):
-
-    - ``sem`` (semaphore) caps *in-flight* requests -- it protects the connection
-      pool / memory. Each reasoning call runs tens of seconds, so RPM pacing alone
-      would let in-flight requests balloon into the hundreds.
-    - the sliding 60s RPM/TPM windows pace the *start rate* against the Azure quota.
-
-    ``acquire`` is deliberately called *inside* the semaphore and right before the
-    call, so a request is counted against the window at the moment it actually goes
-    out. Reserving rate budget earlier (e.g. before waiting for a slot) would let the
-    window run ahead of reality, releasing a burst later -> overshoot -> more 429s.
-    Keep this order.
-
-    The blocked_* / *_blocks counters are read only by the end-of-run report to show
-    whether the local limiter (vs the semaphore or server 429s) is the binding
-    constraint; they never gate behavior.
-    """
+    """Semaphore caps in-flight requests; sliding 60s RPM/TPM windows pace the start rate against Azure quota."""
 
     def __init__(self, max_concurrency: int, target_rpm: int, target_tpm: int):
         self.sem = asyncio.Semaphore(max_concurrency)
@@ -362,11 +285,11 @@ class RateLimiter:
         self._requests: deque[float] = deque()
         self._tokens: deque[tuple[float, int]] = deque()
         self._lock = asyncio.Lock()
-        # Observability only (report), not control:
-        self.blocked_events = 0  # acquires that had to wait at least once
-        self.blocked_seconds = 0.0  # total wall time spent waiting in acquire
-        self.rpm_blocks = 0  # times the RPM predicate tripped
-        self.tpm_blocks = 0  # times the TPM predicate tripped
+        # Observability only (end-of-run report), never gates behavior.
+        self.blocked_events = 0
+        self.blocked_seconds = 0.0
+        self.rpm_blocks = 0
+        self.tpm_blocks = 0
 
     def _purge(self, now: float) -> None:
         cutoff = now - 60.0
@@ -409,25 +332,8 @@ def estimate_tokens(system_prompt: str, text: str) -> int:
     return (len(system_prompt) + len(text)) // 4 + 800
 
 
-# Checkpointing ----
-
-
 def schema_signature(dedup: bool, reasoning_effort: str, deployment: str) -> str:
-    """Global checkpoint fingerprint: run-wide settings that affect every result.
-
-    Stored on every record; a mismatch purges stale records (with a warning) on
-    load, instead of silently reusing them. Holds only the settings that apply to
-    all sections at once:
-
-    - ``reasoning_effort`` and ``deployment`` -- both change what the model emits;
-    - ``dedup`` -- changes the key scheme (flipping it would otherwise orphan every
-      record).
-
-    Per-section concerns (prompt + schema) are fingerprinted in the work-unit key
-    instead (see ``SECTION_FINGERPRINTS``), so editing one section invalidates only
-    that section rather than the whole checkpoint. Section *selection* affects
-    neither, so toggling which sections to parse never invalidates anything.
-    """
+    """Checkpoint fingerprint of run-wide settings; a mismatch purges stale records on load."""
     payload = f"dedup={dedup}|effort={reasoning_effort}|deployment={deployment}"
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
 
@@ -435,12 +341,7 @@ def schema_signature(dedup: bool, reasoning_effort: str, deployment: str) -> str
 def load_checkpoint(
     path: Path, expected_sig: str
 ) -> dict[str, Optional[dict[str, Any]]]:
-    """Return ``{key: result_dict_or_None}`` for completed units matching the schema.
-
-    Records written under a different schema signature are skipped (re-queued),
-    with a warning, so an interrupted run resumed after a schema edit does not
-    emit silently wrong/partial rows.
-    """
+    """Return ``{key: result_dict_or_None}`` for completed units matching the schema signature."""
     done: dict[str, Optional[dict[str, Any]]] = {}
     if not path.exists():
         return done
@@ -489,9 +390,6 @@ class CheckpointWriter:
         self._fh.close()
 
 
-# Work units ----
-
-
 class WorkUnit:
     __slots__ = ("key", "schema", "prompt", "text")
 
@@ -510,26 +408,12 @@ def _text_digest(text: str) -> str:
 
 
 def section_fingerprint(schema: type[BaseModel], prompt: str) -> str:
-    """Hash of a section's prompt + full JSON schema.
-
-    The full ``model_json_schema()`` (not just field names) is what the structured-
-    output call sends to the model, so this captures field descriptions, types,
-    enums and constraints as well as names. Folded into the work-unit key so editing
-    one section's prompt or schema invalidates only that section's cached cells.
-
-    Note: this is tied to pydantic's schema serialization, so a pydantic upgrade
-    that changes ``model_json_schema()`` output would flip every fingerprint and
-    force a one-time full reparse (cost, not correctness; ``sort_keys`` already
-    absorbs dict-ordering churn).
-    """
+    """Hash of a section's prompt + full JSON schema, so editing either invalidates only that section's cache."""
     schema_json = json.dumps(schema.model_json_schema(), sort_keys=True)
     payload = f"{prompt}{_KEY_SEP}{schema_json}"
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
 
 
-# Per-section (prompt + schema) fingerprints, computed once. Live in the key so a
-# change to one section reparses only that section. Global params that affect every
-# section (reasoning_effort, deployment, dedup) live in schema_signature instead.
 SECTION_FINGERPRINTS: dict[str, str] = {
     section: section_fingerprint(schema, prompt)
     for section, (schema, prompt) in INSTANCE_SECTIONS.items()
@@ -537,26 +421,7 @@ SECTION_FINGERPRINTS: dict[str, str] = {
 
 
 def unit_key(order_id: Any, instance: Any, section: str, text: str, dedup: bool) -> str:
-    """Content-addressed checkpoint key for one work unit.
-
-    Every key folds in (a) a hash of the section text and (b) the section's
-    prompt+schema fingerprint, so changed source text *or* a changed prompt/schema
-    yields a new key (auto-reparsed, since it is not in the checkpoint) while
-    everything unchanged keeps the same key (skipped). Both call sites --
-    build_work_units and assemble_rows -- go through this single helper so their
-    keys cannot drift.
-
-    The model output is a pure function of (section prompt, section schema, section
-    text) -- no order_id/instance reaches the model -- so the key scheme is the same
-    for every section (no per-section special cases):
-
-    - ``dedup`` (default): key is ``(section, fingerprint, hash)``. Byte-identical
-      text anywhere in the file collapses to one unit, parsed once and fanned out.
-      Lossless given context-free prompts. This is also what makes a single
-      diagnosis repeated across a report's instances cost one call.
-    - not ``dedup``: key is ``(order_id, instance, section, fingerprint, hash)``.
-      No collapse; each cell is its own unit (change-detection only).
-    """
+    """Content-addressed checkpoint key; with dedup, byte-identical text anywhere collapses to one unit."""
     fp = SECTION_FINGERPRINTS[section]
     digest = _text_digest(text)
     if dedup:
@@ -567,17 +432,7 @@ def unit_key(order_id: Any, instance: Any, section: str, text: str, dedup: bool)
 def build_work_units(
     rows: list[dict[str, Any]], enabled: list[str], dedup: bool
 ) -> tuple[list[WorkUnit], int, int]:
-    """Build the work units for the enabled sections, one per non-empty cell.
-
-    Keys are content-addressed (see ``unit_key``). With ``dedup`` on, byte-identical
-    text collapses to a single unit via the shared ``seen`` set; with it off, every
-    cell is its own unit. Cells that ``is_empty_cell`` flags (null/blank/placeholder)
-    are skipped -- they never become a unit, so they cost no API call.
-
-    Returns ``(units, n_duplicate_cells, n_skipped_empty)``: how many non-empty cells
-    were collapsed away by dedup, and how many non-null cells were dropped as
-    placeholder/empty (JSON nulls are not counted -- they were never content).
-    """
+    """Build one work unit per non-empty cell; returns (units, n_duplicate_cells, n_skipped_empty)."""
     units: list[WorkUnit] = []
     seen: set[str] = set()
     n_cells = 0
@@ -590,8 +445,7 @@ def build_work_units(
         for section, (schema, prompt) in instance_sections.items():
             text = row.get(section)
             if is_empty_cell(text):
-                # Count only non-null placeholders ("NA", ".", ...); a JSON null
-                # section was never content, so it is not a "skipped" cell.
+                # placeholders like "NA" count as skipped; JSON nulls don't
                 if text is not None and str(text).strip():
                     n_skipped_empty += 1
                 continue
@@ -604,9 +458,6 @@ def build_work_units(
             units.append(WorkUnit(key, schema, prompt, text))
 
     return units, n_cells - len(units), n_skipped_empty
-
-
-# Run ----
 
 
 async def run_unit(
@@ -624,21 +475,12 @@ async def run_unit(
 ) -> None:
     est = estimate_tokens(unit.prompt, unit.text)
     result: Optional[dict[str, Any]] = None
-    # Settled (success/refusal/non-retryable) units are checkpointed so they are
-    # not re-queued; a transient exhausted-retry failure stays unset to retry next run.
-    checkpoint_it = False
+    checkpoint_it = False  # False on exhausted retries means re-queued next run
 
     for attempt in range(max_retries + 1):
-        # Hold a concurrency slot only for the call itself; the backoff sleep
-        # below runs outside it so a retrying unit doesn't park a scarce slot.
-        async with limiter.sem:
-            # Re-acquire per attempt so retried calls also count against RPM/TPM.
-            await limiter.acquire(est)
+        async with limiter.sem:  # backoff sleep below runs outside the slot
+            await limiter.acquire(est)  # re-acquired per attempt so retries count too
             stats.calls += 1
-            # In-flight gauge measured here, not from the semaphore (whose occupancy
-            # includes tasks parked in acquire). Decrement in finally: the excepts
-            # below are inside this block, so a decrement after the await would be
-            # skipped on the 429/retry path and leak the gauge past max_concurrency.
             stats.note_inflight_start()
             try:
                 outcome = await parse_section(
@@ -660,8 +502,7 @@ async def run_unit(
                     stats.parsed_ok += 1
                 checkpoint_it = True
                 break
-            except LengthFinishReasonError:
-                # Deterministic -- retrying repeats it; record a permanent null.
+            except LengthFinishReasonError:  # deterministic -- record a permanent null
                 stats.length_nulls += 1
                 logger.debug(
                     "[non-retryable, recorded null] %s: LengthFinishReasonError",
@@ -678,9 +519,6 @@ async def run_unit(
                 checkpoint_it = True
                 break
             except RateLimitError as exc:
-                # Server throttling (429). Rare/actionable -> WARNING so occasional
-                # throttling is visible even at the default level, not just when it
-                # exhausts every retry.
                 stats.http_429 += 1
                 retry_after = _retry_after(exc)
                 if attempt >= max_retries:
@@ -700,7 +538,7 @@ async def run_unit(
                     max_retries + 1,
                     f", Retry-After={retry_after}" if retry_after else "",
                 )
-            except Exception as exc:  # noqa: BLE001 - continue-on-error by design
+            except Exception as exc:  # noqa: BLE001
                 stats.other_retryable += 1
                 if attempt >= max_retries:
                     stats.exhausted_failures += 1
@@ -720,7 +558,7 @@ async def run_unit(
                 )
             finally:
                 stats.note_inflight_end()
-        # Reached only on a retryable, non-final failure (all other paths break).
+        # only reached on a retryable, non-final failure
         await asyncio.sleep(retry_base_delay * (2**attempt))
 
     results[unit.key] = result
@@ -730,19 +568,13 @@ async def run_unit(
 
 
 def _retry_after(exc: RateLimitError) -> Optional[str]:
-    """The server's requested retry delay, if present (logged, not yet honored).
-
-    Prefers the millisecond-precision ``retry-after-ms`` header (which Azure OpenAI
-    commonly returns) over the standard integer-seconds ``retry-after``. Returned as
-    a raw display string with its unit (e.g. ``"1500ms"`` or ``"3s"``) so the log
-    shows which header the server actually sent, not a normalized guess.
-    """
+    """The server's requested retry delay, if present (logged, not yet honored)."""
     resp = getattr(exc, "response", None)
     if resp is None:
         return None
     try:
         headers = resp.headers
-    except Exception:  # noqa: BLE001 - header access is best-effort
+    except Exception:  # noqa: BLE001
         return None
     ms = headers.get("retry-after-ms")
     if ms is not None:
@@ -786,9 +618,6 @@ async def process(
         )
 
 
-# Output assembly ----
-
-
 def build_fieldnames(enabled: list[str]) -> list[str]:
     fields = list(ID_COLUMNS)
     for section, (schema, _) in selected_instance_sections(enabled).items():
@@ -810,9 +639,7 @@ def assemble_rows(
         out: dict[str, Any] = {col: row.get(col) for col in ID_COLUMNS}
 
         for section in instance_sections:
-            # Same empty-cell guard as build_work_units (shared is_empty_cell) so the
-            # key matches the one the unit was stored under -- a drift here would
-            # silently miss lookups, and placeholder cells stay blank in the output.
+            # must match build_work_units' empty-cell guard or the lookup key drifts
             text = row.get(section)
             if is_empty_cell(text):
                 continue
@@ -832,14 +659,10 @@ def write_csv(
 ) -> None:
     fieldnames = build_fieldnames(enabled)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    # csv writes None as an empty string -> null fields render as blank cells.
     with open(output_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(out_rows)
-
-
-# Entry point ----
 
 
 def read_jsonl(path: str) -> list[dict[str, Any]]:
@@ -861,13 +684,7 @@ def read_jsonl(path: str) -> list[dict[str, Any]]:
 
 
 def check_id_columns(rows: list[dict[str, Any]]) -> None:
-    """Verify the passthrough identity columns are present in the input.
-
-    Presence is judged over the whole file: a column counts as present if any row
-    carries it, so a stray row missing an optional key does not trip the guard.
-    A missing ``instance`` (optional) is a single warning; any missing mandatory
-    column aborts before we spend a cent on the model.
-    """
+    """Verify the passthrough identity columns are present somewhere in the input."""
     if not rows:
         return
     present = set().union(*(row.keys() for row in rows))
@@ -991,9 +808,7 @@ async def async_main(args: argparse.Namespace) -> None:
         finally:
             checkpoint_writer.close()
             await client.close()
-        # End-of-run report: outcomes, throughput, and which limit is binding.
-        # Printed (not logged) so it always shows regardless of console log level.
-        print(
+        print(  # printed, not logged, so it always shows regardless of console log level
             "\n"
             + format_run_report(
                 stats,
