@@ -155,7 +155,7 @@ overridable through the local overlay). Three blocks:
 files:                      # input/output paths
   input_jsonl: "data/sections.jsonl"
   output_dir: "data"
-  output_prefix: "parsed"
+  output_prefix: "parsed_sections"
   checkpoint: "data/.checkpoint.jsonl"
 
 sections:                   # which sections to parse/emit (omit block = all)

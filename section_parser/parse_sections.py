@@ -201,8 +201,48 @@ def load_config(config_path: str) -> dict[str, Any]:
         raise SystemExit("Config 'sections' is empty; list at least one section.")
     config["sections"] = selected
 
+    # Throughput/retry knobs. Defaulted + validated so a hand-edited config
+    # missing/mistyping one fails fast with a clear message. This matters more
+    # than a typical range check: max_concurrency/target_rpm/target_tpm=0 don't
+    # error at all, they hang silently (asyncio.Semaphore(0) never admits a task;
+    # RateLimiter.acquire's `< target_rpm` check is always false) -- the exact
+    # failure mode this codebase has already paid down elsewhere (see
+    # build_client's token probe, max_retries=0 on the SDK client).
+    proc = config.get("processing")
+    if proc is None:
+        proc = {}
+    elif not isinstance(proc, dict):
+        raise SystemExit("Config 'processing' must be a mapping of settings, not a list/scalar.")
+    config["processing"] = proc
+    proc.setdefault("max_concurrency", 20)
+    proc.setdefault("target_rpm", 2000)
+    proc.setdefault("target_tpm", 200000)
+    proc.setdefault("max_retries", 5)
+    proc.setdefault("retry_base_delay", 2.0)
+
+    for field in ("max_concurrency", "target_rpm", "target_tpm"):
+        v = proc[field]
+        # bool is an int subclass in Python, so exclude it explicitly -- otherwise
+        # a typo like `max_concurrency: true` would silently pass as 1.
+        if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+            raise SystemExit(
+                f"Config 'processing.{field}' must be a positive integer; got {v!r}."
+            )
+
+    v = proc["max_retries"]
+    if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+        raise SystemExit(
+            f"Config 'processing.max_retries' must be a non-negative integer; got {v!r}."
+        )
+
+    v = proc["retry_base_delay"]
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+        raise SystemExit(
+            "Config 'processing.retry_base_delay' must be a non-negative number; "
+            f"got {v!r}."
+        )
+
     # Global content-dedup: collapse byte-identical section text to one API call.
-    proc = config["processing"]
     proc.setdefault("dedup", True)
     if not isinstance(proc["dedup"], bool):
         raise SystemExit(
@@ -447,6 +487,7 @@ class CheckpointWriter:
     def __init__(self, path: Path, sig: str):
         self._lock = asyncio.Lock()
         self._sig = sig
+        path.parent.mkdir(parents=True, exist_ok=True)
         self._fh = open(path, "a", encoding="utf-8")
 
     async def write(self, key: str, result: Optional[dict[str, Any]]) -> None:

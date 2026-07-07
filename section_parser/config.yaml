@@ -20,7 +20,7 @@ azure_openai:
 files:
   input_jsonl: "data/sections.jsonl"
   output_dir: "data"
-  output_prefix: "parsed"
+  output_prefix: "parsed_sections"
   checkpoint: "data/.checkpoint.jsonl"
 
 # Which sections to parse. The input file may contain all sections; only the
