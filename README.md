@@ -109,8 +109,9 @@ finish the sign-in window when it pops up.
 
 **Everything comes back blank on the first run, no errors** — the model
 probably burned its token budget on reasoning instead of output. Try a
-smaller/simpler input, or raise `max_completion_tokens` in `parse_section()`
-in `section_parser/parse_sections.py`.
+smaller/simpler input, or add a `max_completion_tokens=...` argument to the
+`client.chat.completions.parse(...)` call in `parse_section()` in
+`section_parser/parse_sections.py` (it uses the SDK default today).
 
 **Lots of HTTP 429s in the run report** — turn down `target_rpm`/`target_tpm`
 or `--concurrency`.

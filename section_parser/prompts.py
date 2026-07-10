@@ -53,9 +53,9 @@ Your only job is to find the relevant date and return it as ISO 'YYYY-MM-DD':
 - Source dates are written as mm/dd/yy or mm/dd/yyyy.
 - If several dates appear, pick the FIRST one, which is usually next to the \
 institution name and identifier strings.
-- The plausible year range is about 1995-2026. Use it to repair obvious typos \
+- The plausible year range is about 1995-2030. Use it to repair obvious typos \
 (e.g. '03/12/20150' -> '2015-03-12') and to resolve 2-digit years (95-99 -> \
-1995-1999, 00-26 -> 2000-2026).
+1995-1999, 00-30 -> 2000-2030).
 - If there is no plausible date, return null."""
 
 FINAL_DX_PROMPT = """\

@@ -18,9 +18,9 @@ class SpecimenHeaderSchema(BaseModel):
             "'YYYY-MM-DD'. Source dates appear as mm/dd/yy or mm/dd/yyyy, usually next "
             "to the referring institution name and alphanumeric identifier strings. If "
             "several dates are present, choose the FIRST one (nearest the institution "
-            "name / identifier). The plausible year range is about 1995-2026: use it "
+            "name / identifier). The plausible year range is about 1995-2030: use it "
             "to repair obvious typos (e.g. '03/12/20150' -> '2015-03-12') and to "
-            "resolve 2-digit years (95-99 -> 1995-1999, 00-26 -> 2000-2026). If no "
+            "resolve 2-digit years (95-99 -> 1995-1999, 00-30 -> 2000-2030). If no "
             "plausible date is present, leave null."
         ),
     )

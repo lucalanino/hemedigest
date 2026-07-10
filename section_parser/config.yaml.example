@@ -7,7 +7,7 @@ azure_openai:
   tenant_id: "<YOUR_TENANT_ID>"
   scope: "https://cognitiveservices.azure.com/.default"
   auth: "cli"  # "cli" uses `az login` (tenant_id optional); "browser" requires tenant_id
-  reasoning_effort: "low"  # gpt-5.x: none | low | medium | high | xhigh
+  reasoning_effort: "low"  # gpt-5.x: none | minimal | low | medium | high | xhigh
 
 files:
   input_jsonl: "data/sections.jsonl"
