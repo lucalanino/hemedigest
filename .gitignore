@@ -3,3 +3,4 @@ __pycache__/
 .venv
 config.yaml
 .ruff_cache/
+.pytest_cache/
