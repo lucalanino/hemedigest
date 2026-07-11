@@ -1,25 +1,38 @@
-# hemepath-parsing
+# hemepath-parser
 
-Parses bone marrow pathology report sections into structured data with Azure
-OpenAI structured outputs, and writes it all out as one flat CSV.
+Parse bone marrow pathology reports into a table using Azure OpenAI structured outputs.
 
 ## Input
 
-`data/sections.jsonl` — one specimen instance per line, keyed by `(order_id,
-instance)`. Section fields (`biopsy`, `aspirate`, `flow`, `cell_count`,
-`immunostains`, `specimen_header`) can be null; null ones are just skipped.
-`specimen_header` only shows up on consult (outside-institution) specimens.
+The parser expects JSONL: each line is one report, already split into sections.
+Set the path in `config.yaml` under `files.input_jsonl`.
 
-`data/` is gitignored — it holds PHI, so it should never end up in git.
+The only required keys are the section(s) listed in `config.yaml` under
+`sections:` — the raw text of that section, e.g. `biopsy`, `aspirate`,
+`flow`, `cell_count`, `immunostains`, `specimen_header`, `final_dx`. Any of
+these can be null; null ones are just skipped.
+
+Every other key in a line — `order_id`, `mrn`, whatever else your data has —
+is passed through to the output as-is; nothing else is required.
+
+`order_id` and `instance` get an extra job: the parser reads them to warn you
+when specimens are ambiguous (an `order_id` that repeats with no `instance`
+to tell the rows apart), and, with `dedup: false`, to key the checkpoint
+per-row instead of by content. They don't have to be called that — point
+`files.order_id_col` / `files.instance_col` at whatever your columns are
+actually named.
 
 ## Output columns
+
+Every non-section key from the input comes first, verbatim, followed by the
+parsed fields for each enabled section:
 
 - **biopsy**: cellularity_pct, cellularity_category, blasts_pct, {megakaryocytes,erythroid,myeloid}_dysplastic, fibrosis_increased, fibrosis_grade, adequacy
 - **aspirate**: blasts_pct, {megakaryocytes,erythroid,myeloid}_dysplastic, ring_sideroblasts, ring_sideroblasts_pct, adequacy
 - **flow**: blasts_pct, adequacy, source
 - **cell_count**: blasts_pct, mast_cells_pct
 - **immunostains**: blasts_pct
-- **specimen_header**: date (ISO `YYYY-MM-DD`), null on non-consult rows
+- **specimen_header**: date (ISO `YYYY-MM-DD`)
 - **final_dx**: category (AML, ALL, MDS, MPN, CML, MDS/MPN, CMML, Lymphoma, Myeloma, Solid, Negative, Other), status (overt, residual, remission, negative)
 
 Everything's nullable. Scope is myeloid neoplasms and ALL.
@@ -48,10 +61,10 @@ pip install -r requirements.txt
 cp section_parser/config.yaml.example section_parser/config.yaml
 ```
 
-`config.yaml` is gitignored, so this is where your real Azure values live. At
-minimum, set `azure_openai.endpoint` and `azure_openai.deployment` (plus
-`tenant_id` if you're using `auth: browser`) — the rest of the template already
-has sane defaults.
+`config.yaml` is where your real Azure values live. At minimum, set
+`azure_openai.endpoint` and `azure_openai.deployment` (plus `tenant_id` if
+you're using `auth: browser`) — the rest of the template already has sane
+defaults.
 
 Auth (`azure_openai.auth`):
 
@@ -71,10 +84,10 @@ Other knobs live under `processing:` in the same file:
 | `max_retries` | 5 | retries per cell before it's left for the next run |
 | `retry_base_delay` | 2.0 | backoff base, in seconds |
 | `dedup` | true | parse identical section text once, reuse it everywhere it shows up |
-| `log_level` | WARNING | console verbosity |
+| `log_level` | WARNING | `DEBUG` for tuning concurrency/rate-limit knobs, `WARNING` for a quiet run |
 
-`sections:` picks which sections get parsed/emitted — leave it out to parse
-everything.
+`sections:` is required — it picks which sections get parsed/emitted, and
+doubles as the list of columns your input must have (see Input above).
 
 ## Run
 
@@ -90,12 +103,10 @@ uv run python -m section_parser.parse_sections             # full run
 | `--concurrency N` | override `max_concurrency` |
 | `--yes` | skip the confirmation prompt |
 | `--config PATH` | use a different config file |
-| `--log-level LEVEL` | `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL` |
-| `--quiet` | only log errors |
+| `--log-level LEVEL` | `DEBUG` or `WARNING` (overrides config) |
 | `--log-file PATH` | also write logs to a file (metadata only, never report text) |
 
-Output lands at `data/parsed_sections_<timestamp>.csv`, one row per
-`(order_id, instance)`.
+Output lands at `data/parsed_sections_<timestamp>.csv`, one row per input line.
 
 Runs are checkpointed to `data/.checkpoint.jsonl`, so if one gets interrupted
 it'll just pick back up — already-done cells aren't reprocessed. Edit a

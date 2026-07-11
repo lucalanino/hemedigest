@@ -1,8 +1,19 @@
-"""Aspirate section schema"""
+"""Aspirate section schema and prompt"""
 
 from typing import Optional
 
 from pydantic import BaseModel, Field
+
+from section_parser.schemas._common import COMMON_POLICY
+
+SECTION_NAME = "aspirate"
+
+PROMPT = f"""{COMMON_POLICY}
+
+You are reading the BONE MARROW ASPIRATE smear section.
+The differential blast count usually lives in the cell count section; treat any \
+blast percentage here as a useful fallback. A very small blast percentage \
+(with or without a "<" sign) should be encoded as 0."""
 
 
 class AspirateSchema(BaseModel):
@@ -44,3 +55,6 @@ class AspirateSchema(BaseModel):
         None,
         description="True if the aspirate is reported as adequate, False if inadequate.",
     )
+
+
+SCHEMA = AspirateSchema

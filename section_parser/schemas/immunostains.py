@@ -1,8 +1,18 @@
-"""Immunostains section schema"""
+"""Immunostains section schema and prompt"""
 
 from typing import Optional
 
 from pydantic import BaseModel, Field
+
+from section_parser.schemas._common import COMMON_POLICY
+
+SECTION_NAME = "immunostains"
+
+PROMPT = f"""{COMMON_POLICY}
+
+You are reading the IMMUNOSTAINS section. Estimate the blast percentage, usually \
+from a CD34 stain but stay open to other descriptions (e.g. CD117). A very small \
+blast percentage (with or without a "<" sign) should be encoded as 0."""
 
 
 class ImmunostainsSchema(BaseModel):
@@ -19,3 +29,6 @@ class ImmunostainsSchema(BaseModel):
             "cells, lymphoma lymphocytes, or solid-tumor cells as blasts."
         ),
     )
+
+
+SCHEMA = ImmunostainsSchema

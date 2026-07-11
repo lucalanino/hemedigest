@@ -1,8 +1,18 @@
-"""Flow cytometry section schema"""
+"""Flow cytometry section schema and prompt"""
 
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
+
+from section_parser.schemas._common import COMMON_POLICY
+
+SECTION_NAME = "flow"
+
+PROMPT = f"""{COMMON_POLICY}
+
+You are reading the FLOW CYTOMETRY section. Capture the blast percentage by flow, \
+whether the specimen was adequate, and the specimen source. A very small blast \
+percentage (with or without a "<" sign) should be encoded as 0."""
 
 
 class FlowSchema(BaseModel):
@@ -29,3 +39,6 @@ class FlowSchema(BaseModel):
             "'bone marrow', or 'other'."
         ),
     )
+
+
+SCHEMA = FlowSchema

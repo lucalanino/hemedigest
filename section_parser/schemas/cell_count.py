@@ -1,8 +1,18 @@
-"""Aspirate cell count section schema"""
+"""Aspirate cell count section schema and prompt"""
 
 from typing import Optional
 
 from pydantic import BaseModel, Field
+
+from section_parser.schemas._common import COMMON_POLICY
+
+SECTION_NAME = "cell_count"
+
+PROMPT = f"""{COMMON_POLICY}
+
+You are reading the ASPIRATE CELL COUNT (differential) section. This is the \
+PRIMARY source for the blast count. A very small blast percentage (with or \
+without a "<" sign) should be encoded as 0."""
 
 
 class CellCountSchema(BaseModel):
@@ -27,3 +37,6 @@ class CellCountSchema(BaseModel):
             "If a range is given, use the larger value."
         ),
     )
+
+
+SCHEMA = CellCountSchema

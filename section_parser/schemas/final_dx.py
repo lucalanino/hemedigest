@@ -1,8 +1,19 @@
-"""Final diagnosis section schema"""
+"""Final diagnosis section schema and prompt"""
 
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
+
+SECTION_NAME = "final_dx"
+
+PROMPT = """\
+You classify the FINAL DIAGNOSIS of a bone marrow pathology report, following the \
+field descriptions in the schema.
+
+Base the classification ONLY on the diagnosis rendered on the analyzed specimen. \
+Prior history, prior diagnoses, and concurrent diagnoses at other sites must not \
+change the category; if this specimen shows no morphologic disease, classify it as \
+Negative even when the patient has a known malignancy."""
 
 FinalDxCategory = Literal[
     "AML",
@@ -50,3 +61,6 @@ class FinalDxSchema(BaseModel):
             "or uninvolved staging); category is 'Negative'."
         ),
     )
+
+
+SCHEMA = FinalDxSchema

@@ -2,6 +2,12 @@
 
 Backlog of ideas to revisit. Not scheduled — captured so we don't lose them.
 
+## Docs
+
+- **Add a PHI disclaimer to the README.** One clear statement instead of the
+  scattered per-file mentions that used to be sprinkled through the code and
+  docs (removed 2026-07-10 — they weren't helping anyone).
+
 ## Config design decisions (settled — don't re-litigate)
 
 - **Single gitignored `config.yaml` + committed `config.yaml.example` template**
@@ -11,11 +17,21 @@ Backlog of ideas to revisit. Not scheduled — captured so we don't lose them.
   source of truth for a given key. Not topic-split files, not a separate secrets file.
   Env-var overrides were removed earlier in favor of this file-based approach.
 - **Config vs. code:** values → config (connection/runtime knobs, `log_level`); logic →
-  code. Prompts and schemas stay in code — coupled to `schema_signature` / CSV columns /
-  `ID_COLUMNS`, so externalizing them creates a second source of truth. Same for internal
-  mechanics (token-estimate headroom, key separator, `EMPTY_SENTINELS`).
-  `max_completion_tokens` deliberately not exposed — stick with the SDK default; edit
-  `parse_section()` if you must.
+  code. Prompts and schemas stay in code, co-located per section under
+  `section_parser/schemas/` and collected into `SECTIONS` (2026-07-11: replaced the
+  separate `prompts.py` + hand-built `INSTANCE_SECTIONS` dict -- coupled to
+  `schema_signature` / CSV columns, so keeping them apart was a second source of truth
+  waiting to drift). Same for internal mechanics (token-estimate headroom, key
+  separator, `EMPTY_SENTINELS`). `max_completion_tokens` deliberately not exposed --
+  stick with the SDK default; edit `parse_section()` if you must.
+- **Required input columns are config-derived, passthrough is data-derived.** `sections:`
+  is required (no more implicit "omitted = parse everything") and doubles as the
+  mandatory input columns. Every other input key is passthrough, inferred from the data
+  itself rather than a hardcoded `ID_COLUMNS` list -- add/rename/drop an identity column
+  in your data and no code change is needed. `order_id`/`instance` keep an internal role
+  (checkpoint keys, the ambiguous-specimen warning) but their column names are
+  configurable via `files.order_id_col` / `files.instance_col`, so renaming them in your
+  data doesn't require touching code either.
 - **Stay on YAML** (comments carry real explanation; shallow nesting). Watch the Norway
   problem — quote stringy scalars (`no`/`yes`/`on`/`off`, version strings).
 

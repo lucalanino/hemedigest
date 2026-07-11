@@ -12,7 +12,7 @@ import hashlib
 import json
 import sys
 import time
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -33,43 +33,18 @@ from openai import (
 from pydantic import BaseModel
 from tqdm import tqdm
 
-from section_parser import prompts
 from section_parser.runlog import (
     RunStats,
     format_run_report,
     get_logger,
     setup_logging,
 )
-from section_parser.schemas import (
-    AspirateSchema,
-    BiopsySchema,
-    CellCountSchema,
-    FinalDxSchema,
-    FlowSchema,
-    ImmunostainsSchema,
-    SpecimenHeaderSchema,
-)
+from section_parser.schemas import SECTIONS as INSTANCE_SECTIONS
 
 logger = get_logger()
 
-FINAL_DX_KEY = "final_dx"
-
-INSTANCE_SECTIONS: dict[str, tuple[type[BaseModel], str]] = {
-    "biopsy": (BiopsySchema, prompts.BIOPSY_PROMPT),
-    "aspirate": (AspirateSchema, prompts.ASPIRATE_PROMPT),
-    "flow": (FlowSchema, prompts.FLOW_PROMPT),
-    "cell_count": (CellCountSchema, prompts.CELL_COUNT_PROMPT),
-    "immunostains": (ImmunostainsSchema, prompts.IMMUNOSTAINS_PROMPT),
-    "specimen_header": (SpecimenHeaderSchema, prompts.SPECIMEN_HEADER_PROMPT),
-    FINAL_DX_KEY: (FinalDxSchema, prompts.FINAL_DX_PROMPT),
-}
-
 # All sections the parser knows how to handle, in output order.
 ALL_SECTIONS: list[str] = list(INSTANCE_SECTIONS)
-
-# Passthrough identity columns, carried verbatim from input to output; must match input headers.
-ID_COLUMNS = ["order_id", "mrn", "description", "sample_date", "instance"]
-OPTIONAL_ID_COLUMNS = {"instance"}
 
 # Placeholder tokens treated as empty, matched case-insensitively on the whole stripped cell.
 EMPTY_SENTINELS = {"na", "n/a", "none", "nil", "null", "-", "--", "."}
@@ -134,11 +109,14 @@ def load_config(config_path: str) -> dict[str, Any]:
             f"got {az['reasoning_effort']!r}."
         )
 
-    # Omitted -> parse all; otherwise parse the listed subset, in canonical order.
+    # Required -- also doubles as the set of mandatory input columns (see check_input_columns).
     sections = config.get("sections")
     if sections is None:
-        sections = list(ALL_SECTIONS)
-    elif not isinstance(sections, list):
+        raise SystemExit(
+            "Config 'sections' is required; list the section(s) to parse "
+            f"(valid: {ALL_SECTIONS})."
+        )
+    if not isinstance(sections, list):
         raise SystemExit("Config 'sections' must be a list of section names.")
     unknown = [s for s in sections if s not in ALL_SECTIONS]
     if unknown:
@@ -150,6 +128,17 @@ def load_config(config_path: str) -> dict[str, Any]:
     if not selected:
         raise SystemExit("Config 'sections' is empty; list at least one section.")
     config["sections"] = selected
+
+    files = config.get("files")
+    if files is None:
+        files = {}
+    elif not isinstance(files, dict):
+        raise SystemExit("Config 'files' must be a mapping of settings.")
+    config["files"] = files
+    # Lets a renamed identity column (e.g. order_id -> accession_number) work without
+    # touching the parsing logic; both still flow through as ordinary passthrough columns.
+    files.setdefault("order_id_col", "order_id")
+    files.setdefault("instance_col", "instance")
 
     # Validated because 0 wouldn't error, it'd hang silently (empty semaphore / always-false rate check).
     proc = config.get("processing")
@@ -428,7 +417,11 @@ def unit_key(order_id: Any, instance: Any, section: str, text: str, dedup: bool)
 
 
 def build_work_units(
-    rows: list[dict[str, Any]], enabled: list[str], dedup: bool
+    rows: list[dict[str, Any]],
+    enabled: list[str],
+    dedup: bool,
+    order_id_col: str,
+    instance_col: str,
 ) -> tuple[list[WorkUnit], int, int]:
     """Build one work unit per non-empty cell; returns (units, n_duplicate_cells, n_skipped_empty)."""
     units: list[WorkUnit] = []
@@ -438,8 +431,8 @@ def build_work_units(
 
     instance_sections = selected_instance_sections(enabled)
     for row in rows:
-        order_id = row.get("order_id")
-        instance = row.get("instance")
+        order_id = row.get(order_id_col)
+        instance = row.get(instance_col)
         for section, (schema, prompt) in instance_sections.items():
             text = row.get(section)
             if is_empty_cell(text):
@@ -616,8 +609,21 @@ async def process(
         )
 
 
-def build_fieldnames(enabled: list[str]) -> list[str]:
-    fields = list(ID_COLUMNS)
+def passthrough_columns(rows: list[dict[str, Any]]) -> list[str]:
+    """Every input key that isn't a known section, in first-seen order; carried verbatim to the CSV."""
+    cols: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for key in row:
+            if key in ALL_SECTIONS or key in seen:
+                continue
+            seen.add(key)
+            cols.append(key)
+    return cols
+
+
+def build_fieldnames(passthrough: list[str], enabled: list[str]) -> list[str]:
+    fields = list(passthrough)
     for section, (schema, _) in selected_instance_sections(enabled).items():
         fields.extend(f"{section}_{name}" for name in schema.model_fields)
     return fields
@@ -628,13 +634,16 @@ def assemble_rows(
     results: dict[str, Optional[dict[str, Any]]],
     enabled: list[str],
     dedup: bool,
+    passthrough: list[str],
+    order_id_col: str,
+    instance_col: str,
 ) -> list[dict[str, Any]]:
     out_rows: list[dict[str, Any]] = []
     instance_sections = selected_instance_sections(enabled)
     for row in rows:
-        order_id = row.get("order_id")
-        instance = row.get("instance")
-        out: dict[str, Any] = {col: row.get(col) for col in ID_COLUMNS}
+        order_id = row.get(order_id_col)
+        instance = row.get(instance_col)
+        out: dict[str, Any] = {col: row.get(col) for col in passthrough}
 
         for section in instance_sections:
             # must match build_work_units' empty-cell guard or the lookup key drifts
@@ -653,9 +662,12 @@ def assemble_rows(
 
 
 def write_csv(
-    out_rows: list[dict[str, Any]], output_path: Path, enabled: list[str]
+    out_rows: list[dict[str, Any]],
+    output_path: Path,
+    enabled: list[str],
+    passthrough: list[str],
 ) -> None:
-    fieldnames = build_fieldnames(enabled)
+    fieldnames = build_fieldnames(passthrough, enabled)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
@@ -681,29 +693,36 @@ def read_jsonl(path: str) -> list[dict[str, Any]]:
     return rows
 
 
-def check_id_columns(rows: list[dict[str, Any]]) -> None:
-    """Verify the passthrough identity columns are present somewhere in the input."""
+def check_input_columns(
+    rows: list[dict[str, Any]], enabled: list[str], order_id_col: str, instance_col: str
+) -> None:
+    """Verify the enabled section columns are present; everything else is optional passthrough."""
     if not rows:
         return
     present = set().union(*(row.keys() for row in rows))
-    missing = [col for col in ID_COLUMNS if col not in present]
-    missing_required = [col for col in missing if col not in OPTIONAL_ID_COLUMNS]
-    missing_optional = [col for col in missing if col in OPTIONAL_ID_COLUMNS]
-
-    for col in missing_optional:
-        logger.warning(
-            "optional column '%s' is absent from the input; it will be emitted "
-            "empty. Continuing.",
-            col,
-        )
-    if missing_required:
-        cols = ", ".join(f"'{c}'" for c in missing_required)
+    missing = [s for s in enabled if s not in present]
+    if missing:
+        cols = ", ".join(f"'{c}'" for c in missing)
         raise SystemExit(
-            "ERROR: the input is missing mandatory identity column(s): "
-            f"{cols}. These are carried verbatim into every output row, so parsing "
-            "cannot proceed without them. Check that the input column headers match "
-            f"the expected names ({', '.join(ID_COLUMNS)}) and re-run."
+            f"ERROR: the input is missing section column(s) enabled in config: {cols}. "
+            "Check that the input column headers match the enabled sections "
+            f"({', '.join(enabled)}) and re-run."
         )
+
+    # instance is only load-bearing when order_id repeats -- that's the one
+    # case where rows become genuinely ambiguous without it.
+    if instance_col not in present:
+        dupes = [
+            oid for oid, n in Counter(row.get(order_id_col) for row in rows).items() if n > 1
+        ]
+        if dupes:
+            logger.warning(
+                "column '%s' is absent but %d '%s' value(s) repeat across rows; "
+                "those rows can't be told apart without it.",
+                instance_col,
+                len(dupes),
+                order_id_col,
+            )
 
 
 async def async_main(args: argparse.Namespace) -> None:
@@ -722,6 +741,9 @@ async def async_main(args: argparse.Namespace) -> None:
     if concurrency < 1:
         raise SystemExit("--concurrency must be >= 1")
 
+    order_id_col = files["order_id_col"]
+    instance_col = files["instance_col"]
+
     input_path = files["input_jsonl"]
     print(f"Reading input: {input_path}")
     rows = read_jsonl(input_path)
@@ -731,10 +753,13 @@ async def async_main(args: argparse.Namespace) -> None:
         rows = rows[: args.limit]
         print(f"--limit: using first {len(rows)} rows")
 
-    check_id_columns(rows)
+    check_input_columns(rows, sections, order_id_col, instance_col)
+    passthrough = passthrough_columns(rows)
 
     dedup = proc["dedup"]
-    units, n_duplicates, n_skipped_empty = build_work_units(rows, sections, dedup)
+    units, n_duplicates, n_skipped_empty = build_work_units(
+        rows, sections, dedup, order_id_col, instance_col
+    )
 
     checkpoint_path = Path(files["checkpoint"])
     if args.fresh and checkpoint_path.exists():
@@ -818,12 +843,14 @@ async def async_main(args: argparse.Namespace) -> None:
             )
         )
 
-    out_rows = assemble_rows(rows, results, sections, dedup)
+    out_rows = assemble_rows(
+        rows, results, sections, dedup, passthrough, order_id_col, instance_col
+    )
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_path = (
         Path(files["output_dir"]) / f"{files['output_prefix']}_{timestamp}.csv"
     )
-    write_csv(out_rows, output_path, sections)
+    write_csv(out_rows, output_path, sections, passthrough)
 
     print(f"\nWrote {len(out_rows)} rows to: {output_path}")
     print(f"Checkpoint retained at: {checkpoint_path}")

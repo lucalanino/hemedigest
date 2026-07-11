@@ -1,8 +1,17 @@
-"""Biopsy section schema"""
+"""Biopsy section schema and prompt"""
 
 from typing import Optional
 
 from pydantic import BaseModel, Field
+
+from section_parser.schemas._common import COMMON_POLICY
+
+SECTION_NAME = "biopsy"
+
+PROMPT = f"""{COMMON_POLICY}
+
+You are reading the BONE MARROW CORE BIOPSY (trephine) section.
+Note: in this section only, a blast count reported as "<5%" should be encoded as 3."""
 
 
 class BiopsySchema(BaseModel):
@@ -61,3 +70,6 @@ class BiopsySchema(BaseModel):
         None,
         description="True if the specimen is reported as adequate, False if inadequate.",
     )
+
+
+SCHEMA = BiopsySchema
