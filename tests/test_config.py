@@ -24,21 +24,18 @@ def test_missing_config_file_raises_with_example_hint(tmp_path):
 # ---- azure_openai required fields ----------------------------------------------------
 
 
-def test_missing_endpoint_raises(config_factory):
-    path = config_factory({"azure_openai": {"endpoint": ""}})
-    with pytest.raises(SystemExit, match="endpoint"):
-        load_config(str(path))
-
-
-def test_placeholder_endpoint_raises(config_factory):
-    path = config_factory({"azure_openai": {"endpoint": "<YOUR_AZURE_OPENAI_ENDPOINT>"}})
-    with pytest.raises(SystemExit, match="endpoint"):
-        load_config(str(path))
-
-
-def test_missing_deployment_raises(config_factory):
-    path = config_factory({"azure_openai": {"deployment": ""}})
-    with pytest.raises(SystemExit, match="deployment"):
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("endpoint", ""),
+        ("endpoint", "<YOUR_AZURE_OPENAI_ENDPOINT>"),
+        ("deployment", ""),
+        ("deployment", "<YOUR_DEPLOYMENT>"),
+    ],
+)
+def test_missing_or_placeholder_required_field_raises(config_factory, field, value):
+    path = config_factory({"azure_openai": {field: value}})
+    with pytest.raises(SystemExit, match=field):
         load_config(str(path))
 
 
@@ -93,21 +90,17 @@ def test_sections_missing_raises(tmp_path):
         load_config(str(path))
 
 
-def test_sections_not_a_list_raises(config_factory):
-    path = config_factory({"sections": "biopsy"})
-    with pytest.raises(SystemExit, match="list"):
-        load_config(str(path))
-
-
-def test_sections_unknown_name_raises(config_factory):
-    path = config_factory({"sections": ["biopsy", "not_a_real_section"]})
-    with pytest.raises(SystemExit, match="unknown"):
-        load_config(str(path))
-
-
-def test_sections_empty_list_raises(config_factory):
-    path = config_factory({"sections": []})
-    with pytest.raises(SystemExit, match="empty"):
+@pytest.mark.parametrize(
+    "value,match",
+    [
+        ("biopsy", "list"),
+        (["biopsy", "not_a_real_section"], "unknown"),
+        ([], "empty"),
+    ],
+)
+def test_sections_invalid_value_raises(config_factory, value, match):
+    path = config_factory({"sections": value})
+    with pytest.raises(SystemExit, match=match):
         load_config(str(path))
 
 

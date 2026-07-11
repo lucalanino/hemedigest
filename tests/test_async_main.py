@@ -6,15 +6,11 @@ no real network/API call is made.
 import argparse
 import csv
 import json
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
-
-import yaml
 
 from section_parser import parse_sections as ps
 from section_parser.schemas.biopsy import SCHEMA as BIOPSY_SCHEMA
 
-from tests.conftest import base_config_dict
+from tests.conftest import make_completion
 
 
 def make_args(config_path):
@@ -29,7 +25,9 @@ def make_args(config_path):
     )
 
 
-async def test_async_main_happy_path_writes_csv_and_checkpoints(tmp_path, monkeypatch):
+async def test_async_main_happy_path_writes_csv_and_checkpoints(
+    tmp_path, monkeypatch, config_factory, fake_client
+):
     input_path = tmp_path / "sections.jsonl"
     input_path.write_text(
         json.dumps({"order_id": "A1", "instance": 1, "biopsy": "text one"}) + "\n"
@@ -39,27 +37,23 @@ async def test_async_main_happy_path_writes_csv_and_checkpoints(tmp_path, monkey
 
     out_dir = tmp_path / "out"
     checkpoint_path = tmp_path / "checkpoint.jsonl"
-    cfg = base_config_dict()
-    cfg["sections"] = ["biopsy"]
-    cfg["files"]["input_jsonl"] = str(input_path)
-    cfg["files"]["output_dir"] = str(out_dir)
-    cfg["files"]["checkpoint"] = str(checkpoint_path)
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    config_path = config_factory(
+        {
+            "sections": ["biopsy"],
+            "files": {
+                "input_jsonl": str(input_path),
+                "output_dir": str(out_dir),
+                "checkpoint": str(checkpoint_path),
+            },
+        }
+    )
 
     async def fake_parse(*, model, messages, response_format, reasoning_effort):
         text = messages[1]["content"]
         value = 60 if text == "text one" else 40
-        message = SimpleNamespace(refusal=None, parsed=BIOPSY_SCHEMA(cellularity_pct=value))
-        choice = SimpleNamespace(message=message)
-        usage = SimpleNamespace(total_tokens=100)
-        return SimpleNamespace(choices=[choice], usage=usage)
+        return make_completion(parsed=BIOPSY_SCHEMA(cellularity_pct=value))
 
-    fake_client = SimpleNamespace()
-    fake_client.chat = SimpleNamespace(
-        completions=SimpleNamespace(parse=AsyncMock(side_effect=fake_parse))
-    )
-    fake_client.close = AsyncMock()
+    fake_client.chat.completions.parse.side_effect = fake_parse
     monkeypatch.setattr(ps, "build_client", lambda az: fake_client)
 
     args = make_args(config_path)

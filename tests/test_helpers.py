@@ -1,5 +1,6 @@
 from typing import Optional
 
+import pytest
 from pydantic import BaseModel
 
 from section_parser.parse_sections import (
@@ -91,21 +92,17 @@ def test_schema_signature_same_inputs_same_signature():
     assert a == b
 
 
-def test_schema_signature_changes_with_dedup():
+@pytest.mark.parametrize(
+    "args",
+    [
+        (False, "low", "gpt-5.4"),  # dedup differs
+        (True, "high", "gpt-5.4"),  # reasoning_effort differs
+        (True, "low", "gpt-4o"),  # deployment differs
+    ],
+)
+def test_schema_signature_changes_when_any_arg_differs(args):
     a = schema_signature(True, "low", "gpt-5.4")
-    b = schema_signature(False, "low", "gpt-5.4")
-    assert a != b
-
-
-def test_schema_signature_changes_with_reasoning_effort():
-    a = schema_signature(True, "low", "gpt-5.4")
-    b = schema_signature(True, "high", "gpt-5.4")
-    assert a != b
-
-
-def test_schema_signature_changes_with_deployment():
-    a = schema_signature(True, "low", "gpt-5.4")
-    b = schema_signature(True, "low", "gpt-4o")
+    b = schema_signature(*args)
     assert a != b
 
 

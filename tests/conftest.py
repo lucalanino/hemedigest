@@ -1,7 +1,9 @@
 """Shared fixtures for the section_parser test suite."""
 
 import copy
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 import yaml
@@ -54,19 +56,17 @@ def config_factory(tmp_path):
     return _make
 
 
+def make_completion(parsed=None, refusal=None, tokens=100):
+    """Fake OpenAI ChatCompletion-shaped object for parse_section to consume."""
+    message = SimpleNamespace(refusal=refusal, parsed=parsed)
+    choice = SimpleNamespace(message=message)
+    usage = SimpleNamespace(total_tokens=tokens)
+    return SimpleNamespace(choices=[choice], usage=usage)
+
+
 @pytest.fixture
-def sample_rows() -> list[dict[str, Any]]:
-    return [
-        {
-            "order_id": "A1",
-            "instance": 1,
-            "biopsy": "Cellularity 60%. Blasts 3%.",
-            "aspirate": "Adequate aspirate, blasts <1%.",
-        },
-        {
-            "order_id": "A2",
-            "instance": 1,
-            "biopsy": "Cellularity 40%. Blasts 2%.",
-            "aspirate": None,
-        },
-    ]
+def fake_client():
+    client = SimpleNamespace()
+    client.chat = SimpleNamespace(completions=SimpleNamespace(parse=AsyncMock()))
+    client.close = AsyncMock()
+    return client

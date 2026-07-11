@@ -76,6 +76,22 @@ async def test_checkpoint_writer_roundtrips_through_load_checkpoint(tmp_path):
     assert done == {"key-a": {"x": 1}, "key-b": None}
 
 
+async def test_checkpoint_writer_reopened_on_existing_file_appends_not_truncates(tmp_path):
+    path = tmp_path / "checkpoint.jsonl"
+    first_writer = CheckpointWriter(path, "sig1")
+    await first_writer.write("key-a", {"x": 1})
+    first_writer.close()
+
+    # simulate a resumed run: a new CheckpointWriter opened against the same,
+    # already-populated file must not lose the prior writer's records
+    second_writer = CheckpointWriter(path, "sig1")
+    await second_writer.write("key-b", {"x": 2})
+    second_writer.close()
+
+    done = load_checkpoint(path, "sig1")
+    assert done == {"key-a": {"x": 1}, "key-b": {"x": 2}}
+
+
 async def test_checkpoint_writer_write_after_close_raises(tmp_path):
     path = tmp_path / "checkpoint.jsonl"
     writer = CheckpointWriter(path, "sig1")

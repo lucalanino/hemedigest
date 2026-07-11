@@ -2,23 +2,19 @@
 mocked out -- no real network/API call is ever made.
 """
 
+import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from openai import ContentFilterFinishReasonError, LengthFinishReasonError, RateLimitError
 
+from section_parser import parse_sections as ps
 from section_parser.parse_sections import RateLimiter, WorkUnit, process, run_unit
 from section_parser.runlog import RunStats
 from section_parser.schemas.biopsy import SCHEMA as BIOPSY_SCHEMA
 
-
-def make_completion(parsed=None, refusal=None, tokens=100):
-    message = SimpleNamespace(refusal=refusal, parsed=parsed)
-    choice = SimpleNamespace(message=message)
-    usage = SimpleNamespace(total_tokens=tokens)
-    return SimpleNamespace(choices=[choice], usage=usage)
+from tests.conftest import make_completion
 
 
 def make_rate_limit_error():
@@ -40,15 +36,6 @@ class FakePbar:
 
     def update(self, n=1):
         self.updates += n
-
-
-@pytest.fixture
-def fake_client():
-    client = SimpleNamespace()
-    client.chat = SimpleNamespace()
-    client.chat.completions = SimpleNamespace()
-    client.chat.completions.parse = AsyncMock()
-    return client
 
 
 @pytest.fixture
@@ -85,6 +72,8 @@ async def test_success_on_first_attempt(fake_client, unit, generous_limiter):
     assert results[unit.key]["cellularity_pct"] == 60
     assert checkpoint.writes == [(unit.key, results[unit.key])]
     assert pbar.updates == 1
+    assert stats.inflight == 0
+    assert stats.peak_inflight == 1
 
 
 async def test_refusal_records_null_but_still_checkpoints(fake_client, unit, generous_limiter):
@@ -127,6 +116,10 @@ async def test_rate_limit_exhausts_retries(fake_client, unit, generous_limiter):
     assert unit.key in results
     assert results[unit.key] is None
     assert checkpoint.writes == []
+    # note_inflight_end() must run in a `finally`, even on the exhausted/break path,
+    # or a regression there would leak the inflight counter across retries
+    assert stats.inflight == 0
+    assert stats.peak_inflight == 1
 
 
 async def test_length_finish_reason_error_is_non_retryable(fake_client, unit, generous_limiter):
@@ -184,3 +177,42 @@ async def test_process_runs_multiple_units_and_populates_results(fake_client, ge
     assert stats.parsed_ok == 2
     assert stats.refusals == 1
     assert len(checkpoint.writes) == 3
+
+
+async def test_limiter_is_reacquired_on_every_retry_attempt(fake_client, unit, generous_limiter):
+    real_acquire = generous_limiter.acquire
+    acquire_calls: list[int] = []
+
+    async def counting_acquire(est_tokens):
+        acquire_calls.append(est_tokens)
+        return await real_acquire(est_tokens)
+
+    generous_limiter.acquire = counting_acquire
+
+    fake_client.chat.completions.parse.side_effect = [
+        make_rate_limit_error(),
+        make_completion(parsed=BIOPSY_SCHEMA(cellularity_pct=50)),
+    ]
+    await run_it(unit, fake_client, generous_limiter)
+
+    # one acquire() for the failed attempt, one for the retry -- if acquire() were
+    # hoisted out of the retry loop, this would be 1 regardless of retry count
+    assert len(acquire_calls) == 2
+
+
+async def test_retry_backoff_follows_exponential_formula(fake_client, unit, generous_limiter, monkeypatch):
+    real_sleep = asyncio.sleep
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+        await real_sleep(0)
+
+    monkeypatch.setattr(ps.asyncio, "sleep", fake_sleep)
+
+    fake_client.chat.completions.parse.side_effect = [make_rate_limit_error() for _ in range(3)]
+    await run_it(unit, fake_client, generous_limiter, max_retries=2, retry_base_delay=1.0)
+
+    # retry_base_delay * 2**attempt for each retryable, non-final attempt (0, 1);
+    # the final, exhausted attempt breaks out without sleeping again
+    assert sleep_calls == [1.0, 2.0]

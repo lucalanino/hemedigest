@@ -106,8 +106,11 @@ def test_setup_logging_is_idempotent_across_calls():
 def test_setup_logging_adds_file_handler(tmp_path):
     log_file = tmp_path / "run.log"
     logger = setup_logging("WARNING", str(log_file))
-    file_handlers = [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
-    assert len(file_handlers) == 1
-    assert file_handlers[0].baseFilename == os.path.abspath(str(log_file))
-    # cleanup so later tests re-adding handlers don't leak this file handle
-    setup_logging("WARNING")
+    try:
+        file_handlers = [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
+        assert len(file_handlers) == 1
+        assert file_handlers[0].baseFilename == os.path.abspath(str(log_file))
+    finally:
+        # always close the FileHandler, even on assertion failure, or tmp_path
+        # teardown can hit a PermissionError on Windows that masks the real failure
+        setup_logging("WARNING")
