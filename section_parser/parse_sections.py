@@ -1,11 +1,9 @@
-"""Parse bone marrow report sections via Azure OpenAI structured outputs into one flat, checkpointed CSV.
+"""Parse bone marrow report sections via Azure OpenAI structured outputs into one flat CSV.
 
 Usage:
     python -m section_parser.parse_sections [--config PATH] [--limit N]
                                             [--fresh] [--concurrency N] [--yes]
 """
-
-from __future__ import annotations
 
 import argparse
 import asyncio
@@ -98,13 +96,13 @@ def _is_placeholder(value: Any) -> bool:
 
 
 def load_config(config_path: str) -> dict[str, Any]:
-    """Load the YAML config (gitignored; see config.yaml.example for the template)."""
+    """Load the YAML config."""
     cfg = Path(config_path)
     if not cfg.exists():
         example = cfg.parent / f"{cfg.name}.example"
         raise SystemExit(
             f"Config file not found at '{config_path}'. Copy '{example.name}' to "
-            f"'{cfg.name}' and fill in your real Azure values."
+            f"'{cfg.name}' and fill in real values."
         )
     with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)

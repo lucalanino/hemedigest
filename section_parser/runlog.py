@@ -1,9 +1,4 @@
-"""Run-time logging, stats, and the end-of-run report for the section parser.
-
-PHI discipline: never log report text, cell content, MRNs, or order identifiers -- only content-hash keys, exception type names, and numeric metadata.
-"""
-
-from __future__ import annotations
+"""Run-time logging, stats, and the end-of-run report for the section parser."""
 
 import logging
 from dataclasses import dataclass
