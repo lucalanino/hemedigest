@@ -13,8 +13,6 @@ from tqdm import tqdm
 
 LOGGER_NAME = "section_parser"
 
-_VALID_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-
 
 def get_logger() -> logging.Logger:
     return logging.getLogger(LOGGER_NAME)

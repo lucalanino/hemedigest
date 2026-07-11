@@ -197,7 +197,7 @@ def load_config(config_path: str) -> dict[str, Any]:
 
     proc.setdefault("log_level", "WARNING")
     level = str(proc["log_level"]).upper()
-    valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+    valid_levels = {"DEBUG", "WARNING"}
     if level not in valid_levels:
         raise SystemExit(
             f"Config 'processing.log_level' must be one of {sorted(valid_levels)}; "
@@ -715,8 +715,7 @@ async def async_main(args: argparse.Namespace) -> None:
     files = config["files"]
     sections = config["sections"]
 
-    # CLI wins over config: --quiet -> ERROR, then --log-level, else config default.
-    log_level = "ERROR" if args.quiet else (args.log_level or proc["log_level"])
+    log_level = args.log_level or proc["log_level"]  # CLI overrides config default
     setup_logging(log_level, args.log_file)
 
     concurrency = (
@@ -853,14 +852,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--log-level",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        choices=["DEBUG", "WARNING"],
         default=None,
-        help="Console log level (overrides config; default WARNING)",
-    )
-    parser.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Only log errors (shortcut for --log-level ERROR)",
+        help="Console log level: DEBUG for tuning concurrency/rate limits, "
+        "WARNING for a quiet run (overrides config; default WARNING)",
     )
     parser.add_argument(
         "--log-file",
