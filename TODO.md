@@ -48,3 +48,16 @@ Now observable via the end-of-run run report (logging shipped). Defaults:
 - **Consider honoring `Retry-After`** instead of the current fixed exponential backoff. A
   429 is rejected before processing (zero tokens billed), so the only cost is wasted
   wall-clock; the header is already logged.
+
+
+# ACTUAL TODOS
+
+- Renaming
+- License
+- GH Actions
+- Test in prod
+- Check logs
+- Check this works in py 3.13+ // relax the pinning
+- make sure both uv and pip work
+- Final readme check
+- Ship

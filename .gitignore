@@ -1,6 +1,6 @@
-__pycache__/
 *.py[oc]
 .venv
 config.yaml
 .ruff_cache/
 .pytest_cache/
+__pycache__/
