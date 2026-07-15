@@ -52,8 +52,6 @@ Now observable via the end-of-run run report (logging shipped). Defaults:
 
 # ACTUAL TODOS
 
-- Renaming
-- License
 - GH Actions
 - Test in prod
 - Check logs
