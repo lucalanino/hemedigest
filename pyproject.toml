@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Parse bone marrow pathology report sections into structured data using Azure OpenAI structured outputs."
 readme = "README.md"
 license = "MIT"
+authors = [{ name = "Luca Lanino", email = "lucalanino@gmail.com" }]
 requires-python = "==3.12.0"
 dependencies = [
     "azure-identity>=1.25.3",
@@ -12,6 +13,9 @@ dependencies = [
     "pyyaml>=6.0.3",
     "tqdm>=4.68.2",
 ]
+
+[project.urls]
+Repository = "https://github.com/lucalanino/hemepath-parser"
 
 [dependency-groups]
 dev = [
