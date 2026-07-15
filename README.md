@@ -39,7 +39,7 @@ Everything's nullable. Scope is myeloid neoplasms and ALL.
 
 ## Install
 
-Needs Python 3.12.
+Needs Python 3.12+.
 
 With uv:
 

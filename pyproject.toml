@@ -5,7 +5,7 @@ description = "Parse bone marrow pathology report sections into structured data 
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "Luca Lanino", email = "lucalanino@gmail.com" }]
-requires-python = "==3.12.0"
+requires-python = ">=3.12"
 dependencies = [
     "azure-identity>=1.25.3",
     "openai>=2.41.1",

@@ -55,7 +55,6 @@ Now observable via the end-of-run run report (logging shipped). Defaults:
 - GH Actions
 - Test in prod
 - Check logs
-- Check this works in py 3.13+ // relax the pinning
 - make sure both uv and pip work
 - Final readme check
 - Ship
