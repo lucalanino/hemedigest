@@ -1,6 +1,6 @@
 # hemepath-parser
 
-Parse bone marrow pathology reports into a table using Azure OpenAI structured outputs.
+Parse free text from bone marrow pathology reports into a structured tabular format using Azure OpenAI.
 
 ## Input
 
