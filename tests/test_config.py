@@ -2,7 +2,6 @@ import pytest
 import yaml
 
 from section_parser.parse_sections import ALL_SECTIONS, load_config
-
 from tests.conftest import base_config_dict
 
 
@@ -52,9 +51,7 @@ def test_browser_auth_without_tenant_id_raises(config_factory):
 
 
 def test_browser_auth_with_tenant_id_succeeds(config_factory):
-    path = config_factory(
-        {"azure_openai": {"auth": "browser", "tenant_id": "11111111-1111-1111-1111-111111111111"}}
-    )
+    path = config_factory({"azure_openai": {"auth": "browser", "tenant_id": "11111111-1111-1111-1111-111111111111"}})
     config = load_config(str(path))
     assert config["azure_openai"]["auth"] == "browser"
 

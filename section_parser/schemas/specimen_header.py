@@ -1,7 +1,6 @@
 """Specimen header section schema and prompt: extracts the date from an otherwise boilerplate free-text header."""
 
 import re
-from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -25,9 +24,10 @@ institution name and identifier strings.
 
 
 class SpecimenHeaderSchema(BaseModel):
-    """Date extracted from the specimen header, kept as ``str`` since structured outputs rejects ``format`` and a ``date`` field would raise (not null) on bad model output."""
+    """Date extracted from the specimen header, kept as ``str`` since structured outputs
+    rejects ``format`` and a ``date`` field would raise (not null) on bad model output."""
 
-    date: Optional[str] = Field(
+    date: str | None = Field(
         None,
         description=(
             "The single most relevant date in the specimen header, normalized to ISO "
@@ -43,7 +43,7 @@ class SpecimenHeaderSchema(BaseModel):
 
     @field_validator("date")
     @classmethod
-    def _coerce_iso(cls, v: Optional[str]) -> Optional[str]:
+    def _coerce_iso(cls, v: str | None) -> str | None:
         # drop anything that isn't a clean ISO date
         if v is None:
             return None

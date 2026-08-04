@@ -1,7 +1,5 @@
 """Immunostains section schema and prompt"""
 
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 from section_parser.schemas._common import COMMON_POLICY
@@ -18,7 +16,7 @@ blast percentage (with or without a "<" sign) should be encoded as 0."""
 class ImmunostainsSchema(BaseModel):
     """Structured fields extracted from the immunostains section."""
 
-    blasts_pct: Optional[int] = Field(
+    blasts_pct: int | None = Field(
         None,
         description=(
             "Blast percentage estimated from immunostains (integer). This is usually "

@@ -1,5 +1,3 @@
-from typing import Optional
-
 import pytest
 from pydantic import BaseModel
 
@@ -14,7 +12,6 @@ from section_parser.parse_sections import (
     unit_key,
 )
 from section_parser.schemas.biopsy import SCHEMA as BIOPSY_SCHEMA
-
 
 # ---- is_empty_cell ----------------------------------------------------
 
@@ -117,8 +114,8 @@ def test_section_fingerprint_changes_with_prompt_text():
 
 def test_section_fingerprint_changes_with_schema_fields():
     class ModifiedBiopsySchema(BaseModel):
-        cellularity_pct: Optional[int] = None
-        extra_field: Optional[str] = None
+        cellularity_pct: int | None = None
+        extra_field: str | None = None
 
     fp1 = section_fingerprint(BIOPSY_SCHEMA, "same prompt")
     fp2 = section_fingerprint(ModifiedBiopsySchema, "same prompt")

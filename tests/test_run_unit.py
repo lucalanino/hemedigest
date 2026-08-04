@@ -13,7 +13,6 @@ from section_parser import parse_sections as ps
 from section_parser.parse_sections import RateLimiter, WorkUnit, process, run_unit
 from section_parser.runlog import RunStats
 from section_parser.schemas.biopsy import SCHEMA as BIOPSY_SCHEMA
-
 from tests.conftest import make_completion
 
 
@@ -54,8 +53,17 @@ async def run_it(unit, fake_client, limiter, max_retries=3, retry_base_delay=0.0
     stats = RunStats()
     pbar = FakePbar()
     await run_unit(
-        unit, fake_client, "gpt-5.4", limiter, checkpoint, results, stats,
-        max_retries, retry_base_delay, "low", pbar,
+        unit,
+        fake_client,
+        "gpt-5.4",
+        limiter,
+        checkpoint,
+        results,
+        stats,
+        max_retries,
+        retry_base_delay,
+        "low",
+        pbar,
     )
     return checkpoint, results, stats, pbar
 
@@ -103,9 +111,7 @@ async def test_rate_limit_then_success(fake_client, unit, generous_limiter):
 
 async def test_rate_limit_exhausts_retries(fake_client, unit, generous_limiter):
     fake_client.chat.completions.parse.side_effect = [make_rate_limit_error() for _ in range(3)]
-    checkpoint, results, stats, pbar = await run_it(
-        unit, fake_client, generous_limiter, max_retries=2
-    )
+    checkpoint, results, stats, pbar = await run_it(unit, fake_client, generous_limiter, max_retries=2)
 
     assert stats.http_429 == 3
     assert stats.retries == 2
@@ -123,9 +129,7 @@ async def test_rate_limit_exhausts_retries(fake_client, unit, generous_limiter):
 
 
 async def test_length_finish_reason_error_is_non_retryable(fake_client, unit, generous_limiter):
-    fake_client.chat.completions.parse.side_effect = LengthFinishReasonError(
-        completion=SimpleNamespace(usage=None)
-    )
+    fake_client.chat.completions.parse.side_effect = LengthFinishReasonError(completion=SimpleNamespace(usage=None))
     checkpoint, results, stats, pbar = await run_it(unit, fake_client, generous_limiter)
 
     assert stats.length_nulls == 1
@@ -167,8 +171,16 @@ async def test_process_runs_multiple_units_and_populates_results(fake_client, ge
     stats = RunStats()
 
     await process(
-        units, results, stats, fake_client, "gpt-5.4", generous_limiter, checkpoint,
-        max_retries=3, retry_base_delay=0.0, reasoning_effort="low",
+        units,
+        results,
+        stats,
+        fake_client,
+        "gpt-5.4",
+        generous_limiter,
+        checkpoint,
+        max_retries=3,
+        retry_base_delay=0.0,
+        reasoning_effort="low",
     )
 
     assert results["k1"]["cellularity_pct"] == 10

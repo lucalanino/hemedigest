@@ -11,7 +11,6 @@ from section_parser.parse_sections import (
     write_csv,
 )
 
-
 # ---- passthrough_columns ----------------------------------------------------
 
 

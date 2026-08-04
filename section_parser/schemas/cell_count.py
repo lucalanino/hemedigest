@@ -1,7 +1,5 @@
 """Aspirate cell count section schema and prompt"""
 
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 from section_parser.schemas._common import COMMON_POLICY
@@ -20,7 +18,7 @@ class CellCountSchema(BaseModel):
     This is the PRIMARY source for the blast count.
     """
 
-    blasts_pct: Optional[int] = Field(
+    blasts_pct: int | None = Field(
         None,
         description=(
             "Blast percentage from the differential (integer). This is the primary "
@@ -30,7 +28,7 @@ class CellCountSchema(BaseModel):
             "count plasma cells, lymphoma lymphocytes, or solid-tumor cells as blasts."
         ),
     )
-    mast_cells_pct: Optional[int] = Field(
+    mast_cells_pct: int | None = Field(
         None,
         description=(
             "Mast cell percentage from the differential (integer). Often not reported. "

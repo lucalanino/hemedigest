@@ -19,8 +19,6 @@ from section_parser.schemas import (
 
 _MODULES = (biopsy, aspirate, flow, cell_count, immunostains, specimen_header, final_dx)
 
-SECTIONS: dict[str, tuple[type[BaseModel], str]] = {
-    m.SECTION_NAME: (m.SCHEMA, m.PROMPT) for m in _MODULES
-}
+SECTIONS: dict[str, tuple[type[BaseModel], str]] = {m.SECTION_NAME: (m.SCHEMA, m.PROMPT) for m in _MODULES}
 
 __all__ = ["SECTIONS"]

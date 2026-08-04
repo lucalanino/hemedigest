@@ -12,8 +12,7 @@ def test_load_checkpoint_missing_file_returns_empty(tmp_path):
 def test_load_checkpoint_reads_matching_records(tmp_path):
     path = tmp_path / "checkpoint.jsonl"
     path.write_text(
-        '{"key": "a", "sig": "sig1", "result": {"x": 1}}\n'
-        '{"key": "b", "sig": "sig1", "result": null}\n',
+        '{"key": "a", "sig": "sig1", "result": {"x": 1}}\n{"key": "b", "sig": "sig1", "result": null}\n',
         encoding="utf-8",
     )
     done = load_checkpoint(path, "sig1")
@@ -57,8 +56,7 @@ def test_load_checkpoint_stale_record_removes_earlier_valid_one_for_same_key(tmp
     path = tmp_path / "checkpoint.jsonl"
     # same key written twice: once under the current sig, once (later) under a stale sig
     path.write_text(
-        '{"key": "a", "sig": "new-sig", "result": {"x": 1}}\n'
-        '{"key": "a", "sig": "old-sig", "result": {"x": 2}}\n',
+        '{"key": "a", "sig": "new-sig", "result": {"x": 1}}\n{"key": "a", "sig": "old-sig", "result": {"x": 2}}\n',
         encoding="utf-8",
     )
     done = load_checkpoint(path, "new-sig")

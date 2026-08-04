@@ -1,6 +1,6 @@
 """Final diagnosis section schema and prompt"""
 
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -36,7 +36,7 @@ FinalDxStatus = Literal["overt", "residual", "remission", "negative"]
 class FinalDxSchema(BaseModel):
     """Structured fields extracted from the report-level final diagnosis"""
 
-    category: Optional[FinalDxCategory] = Field(
+    category: FinalDxCategory | None = Field(
         None,
         description=(
             "Single macro-category of the diagnosis rendered on the analyzed "
@@ -47,7 +47,7 @@ class FinalDxSchema(BaseModel):
             "if no category fits or it cannot be determined."
         ),
     )
-    status: Optional[FinalDxStatus] = Field(
+    status: FinalDxStatus | None = Field(
         None,
         description=(
             "Disease status on the analyzed specimen, by the amount of detectable "

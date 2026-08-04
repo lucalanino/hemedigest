@@ -1,6 +1,6 @@
 """Flow cytometry section schema and prompt"""
 
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -18,7 +18,7 @@ percentage (with or without a "<" sign) should be encoded as 0."""
 class FlowSchema(BaseModel):
     """Structured fields extracted from the flow cytometry section."""
 
-    blasts_pct: Optional[int] = Field(
+    blasts_pct: int | None = Field(
         None,
         description=(
             "Blast percentage by flow cytometry (integer). Include blast equivalents. "
@@ -28,16 +28,13 @@ class FlowSchema(BaseModel):
             "lymphocytes, or solid-tumor cells as blasts."
         ),
     )
-    adequacy: Optional[bool] = Field(
+    adequacy: bool | None = Field(
         None,
         description="True if the specimen is reported as adequate, False if inadequate.",
     )
-    source: Optional[Literal["peripheral blood", "bone marrow", "other"]] = Field(
+    source: Literal["peripheral blood", "bone marrow", "other"] | None = Field(
         None,
-        description=(
-            "Specimen source the flow study was run on: 'peripheral blood', "
-            "'bone marrow', or 'other'."
-        ),
+        description=("Specimen source the flow study was run on: 'peripheral blood', 'bone marrow', or 'other'."),
     )
 
 

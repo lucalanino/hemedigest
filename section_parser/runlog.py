@@ -32,9 +32,7 @@ def setup_logging(level: str, log_file: str | None = None) -> logging.Logger:
         logger.removeHandler(handler)
         handler.close()
 
-    fmt = logging.Formatter(
-        "%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S"
-    )
+    fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
 
     console = TqdmLoggingHandler()
     console.setLevel(getattr(logging, level))
@@ -119,14 +117,10 @@ def format_run_report(
     lines.append(f"  Calls made:            {stats.calls}")
     lines.append(f"  Achieved RPM (avg):    {achieved_rpm:.0f} / {target_rpm} target")
     lines.append(f"  Achieved TPM (avg):    {achieved_tpm:.0f} / {target_tpm} target")
-    lines.append(
-        f"  Actual tokens total:   {stats.actual_tokens} (~{avg_tokens:.0f}/call)"
-    )
+    lines.append(f"  Actual tokens total:   {stats.actual_tokens} (~{avg_tokens:.0f}/call)")
 
     lines.append("Limits")
-    lines.append(
-        f"  Peak in-flight:        {stats.peak_inflight} / {max_concurrency} max"
-    )
+    lines.append(f"  Peak in-flight:        {stats.peak_inflight} / {max_concurrency} max")
     lines.append(
         f"  Rate-limiter blocks:   {limiter.blocked_events} "
         f"(rpm {limiter.rpm_blocks}, tpm {limiter.tpm_blocks}), "
@@ -142,19 +136,14 @@ def format_run_report(
 def _verdict(stats: RunStats, limiter, max_concurrency: int) -> str:
     """One-line, actionable read on which limit is binding."""
     if stats.http_429 > 0:
-        return (
-            "server throttling (429s hit) -- lower target_rpm/target_tpm or "
-            "--concurrency, or honor Retry-After."
-        )
+        return "server throttling (429s hit) -- lower target_rpm/target_tpm or --concurrency, or honor Retry-After."
     if limiter.blocked_seconds >= 1.0:
         which = "RPM" if limiter.rpm_blocks >= limiter.tpm_blocks else "TPM"
         return (
-            f"local rate limiter binding (mostly {which}) -- raise "
-            f"target_{which.lower()} if your Azure quota allows."
+            f"local rate limiter binding (mostly {which}) -- raise target_{which.lower()} if your Azure quota allows."
         )
     if stats.peak_inflight >= max_concurrency:
         return (
-            "semaphore binding (peak in-flight hit max) with rate-limit headroom -- "
-            "raise --concurrency to go faster."
+            "semaphore binding (peak in-flight hit max) with rate-limit headroom -- raise --concurrency to go faster."
         )
     return "headroom on all limits -- not saturated; more input or concurrency would use it."

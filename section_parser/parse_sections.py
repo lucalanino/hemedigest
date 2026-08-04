@@ -16,7 +16,7 @@ from collections import Counter, deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import yaml
 from azure.identity import (
@@ -76,19 +76,16 @@ def load_config(config_path: str) -> dict[str, Any]:
     if not cfg.exists():
         example = cfg.parent / f"{cfg.name}.example"
         raise SystemExit(
-            f"Config file not found at '{config_path}'. Copy '{example.name}' to "
-            f"'{cfg.name}' and fill in real values."
+            f"Config file not found at '{config_path}'. Copy '{example.name}' to '{cfg.name}' and fill in real values."
         )
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     az = config["azure_openai"]
 
     az.setdefault("auth", "cli")
     if az["auth"] not in {"cli", "browser"}:
-        raise SystemExit(
-            f"Azure config 'auth' must be 'cli' or 'browser'; got {az['auth']!r}."
-        )
+        raise SystemExit(f"Azure config 'auth' must be 'cli' or 'browser'; got {az['auth']!r}.")
 
     # tenant_id is only required for browser auth; CLI auth derives it from `az login`.
     required = ["endpoint", "deployment"]
@@ -105,25 +102,18 @@ def load_config(config_path: str) -> dict[str, Any]:
     valid_efforts = {"none", "minimal", "low", "medium", "high", "xhigh"}
     if az["reasoning_effort"] not in valid_efforts:
         raise SystemExit(
-            f"Azure config 'reasoning_effort' must be one of {sorted(valid_efforts)}; "
-            f"got {az['reasoning_effort']!r}."
+            f"Azure config 'reasoning_effort' must be one of {sorted(valid_efforts)}; got {az['reasoning_effort']!r}."
         )
 
     # Required -- also doubles as the set of mandatory input columns (see check_input_columns).
     sections = config.get("sections")
     if sections is None:
-        raise SystemExit(
-            "Config 'sections' is required; list the section(s) to parse "
-            f"(valid: {ALL_SECTIONS})."
-        )
+        raise SystemExit(f"Config 'sections' is required; list the section(s) to parse (valid: {ALL_SECTIONS}).")
     if not isinstance(sections, list):
         raise SystemExit("Config 'sections' must be a list of section names.")
     unknown = [s for s in sections if s not in ALL_SECTIONS]
     if unknown:
-        raise SystemExit(
-            f"Config 'sections' has unknown name(s) {unknown}; "
-            f"valid sections are {ALL_SECTIONS}."
-        )
+        raise SystemExit(f"Config 'sections' has unknown name(s) {unknown}; valid sections are {ALL_SECTIONS}.")
     selected = [s for s in ALL_SECTIONS if s in sections]
     if not selected:
         raise SystemExit("Config 'sections' is empty; list at least one section.")
@@ -145,9 +135,7 @@ def load_config(config_path: str) -> dict[str, Any]:
     if proc is None:
         proc = {}
     elif not isinstance(proc, dict):
-        raise SystemExit(
-            "Config 'processing' must be a mapping of settings, not a list/scalar."
-        )
+        raise SystemExit("Config 'processing' must be a mapping of settings, not a list/scalar.")
     config["processing"] = proc
     proc.setdefault("max_concurrency", 20)
     proc.setdefault("target_rpm", 2000)
@@ -159,36 +147,26 @@ def load_config(config_path: str) -> dict[str, Any]:
         v = proc[field]
         # bool is an int subclass in Python, so exclude it or `true` would silently pass as 1.
         if isinstance(v, bool) or not isinstance(v, int) or v < 1:
-            raise SystemExit(
-                f"Config 'processing.{field}' must be a positive integer; got {v!r}."
-            )
+            raise SystemExit(f"Config 'processing.{field}' must be a positive integer; got {v!r}.")
 
     v = proc["max_retries"]
     if isinstance(v, bool) or not isinstance(v, int) or v < 0:
-        raise SystemExit(
-            f"Config 'processing.max_retries' must be a non-negative integer; got {v!r}."
-        )
+        raise SystemExit(f"Config 'processing.max_retries' must be a non-negative integer; got {v!r}.")
 
     v = proc["retry_base_delay"]
     if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
-        raise SystemExit(
-            "Config 'processing.retry_base_delay' must be a non-negative number; "
-            f"got {v!r}."
-        )
+        raise SystemExit(f"Config 'processing.retry_base_delay' must be a non-negative number; got {v!r}.")
 
     proc.setdefault("dedup", True)
     if not isinstance(proc["dedup"], bool):
-        raise SystemExit(
-            f"Config 'processing.dedup' must be true or false; got {proc['dedup']!r}."
-        )
+        raise SystemExit(f"Config 'processing.dedup' must be true or false; got {proc['dedup']!r}.")
 
     proc.setdefault("log_level", "WARNING")
     level = str(proc["log_level"]).upper()
     valid_levels = {"DEBUG", "WARNING"}
     if level not in valid_levels:
         raise SystemExit(
-            f"Config 'processing.log_level' must be one of {sorted(valid_levels)}; "
-            f"got {proc['log_level']!r}."
+            f"Config 'processing.log_level' must be one of {sorted(valid_levels)}; got {proc['log_level']!r}."
         )
     proc["log_level"] = level
     return config
@@ -214,9 +192,7 @@ def build_client(az: dict[str, Any]) -> AsyncAzureOpenAI:
             if az["auth"] == "cli"
             else "Complete the browser sign-in when prompted."
         )
-        raise SystemExit(
-            f"Azure authentication failed ({type(exc).__name__}): {exc}\n{hint}"
-        )
+        raise SystemExit(f"Azure authentication failed ({type(exc).__name__}): {exc}\n{hint}") from None
 
     token_provider = get_bearer_token_provider(credential, az["scope"])
     return AsyncAzureOpenAI(
@@ -231,7 +207,7 @@ def build_client(az: dict[str, Any]) -> AsyncAzureOpenAI:
 class CallOutcome:
     """Result of one model call: parsed value, whether it was a refusal, and actual token usage."""
 
-    parsed: Optional[BaseModel]
+    parsed: BaseModel | None
     refused: bool
     tokens: int
 
@@ -289,7 +265,7 @@ class RateLimiter:
         """Block until issuing a request with ``est_tokens`` stays within limits."""
         # Clamp so an oversized request still passes an empty window (no infinite spin).
         est_tokens = min(est_tokens, self.target_tpm)
-        wait_start: Optional[float] = None
+        wait_start: float | None = None
         while True:
             async with self._lock:
                 now = time.monotonic()
@@ -325,15 +301,13 @@ def schema_signature(dedup: bool, reasoning_effort: str, deployment: str) -> str
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
 
 
-def load_checkpoint(
-    path: Path, expected_sig: str
-) -> dict[str, Optional[dict[str, Any]]]:
+def load_checkpoint(path: Path, expected_sig: str) -> dict[str, dict[str, Any] | None]:
     """Return ``{key: result_dict_or_None}`` for completed units matching the schema signature."""
-    done: dict[str, Optional[dict[str, Any]]] = {}
+    done: dict[str, dict[str, Any] | None] = {}
     if not path.exists():
         return done
     stale = 0
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -366,11 +340,9 @@ class CheckpointWriter:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._fh = open(path, "a", encoding="utf-8")
 
-    async def write(self, key: str, result: Optional[dict[str, Any]]) -> None:
+    async def write(self, key: str, result: dict[str, Any] | None) -> None:
         async with self._lock:
-            self._fh.write(
-                json.dumps({"key": key, "sig": self._sig, "result": result}) + "\n"
-            )
+            self._fh.write(json.dumps({"key": key, "sig": self._sig, "result": result}) + "\n")
             self._fh.flush()
 
     def close(self) -> None:
@@ -402,8 +374,7 @@ def section_fingerprint(schema: type[BaseModel], prompt: str) -> str:
 
 
 SECTION_FINGERPRINTS: dict[str, str] = {
-    section: section_fingerprint(schema, prompt)
-    for section, (schema, prompt) in INSTANCE_SECTIONS.items()
+    section: section_fingerprint(schema, prompt) for section, (schema, prompt) in INSTANCE_SECTIONS.items()
 }
 
 
@@ -457,7 +428,7 @@ async def run_unit(
     deployment: str,
     limiter: RateLimiter,
     checkpoint: CheckpointWriter,
-    results: dict[str, Optional[dict[str, Any]]],
+    results: dict[str, dict[str, Any] | None],
     stats: RunStats,
     max_retries: int,
     retry_base_delay: float,
@@ -465,7 +436,7 @@ async def run_unit(
     pbar: tqdm,
 ) -> None:
     est = estimate_tokens(unit.prompt, unit.text)
-    result: Optional[dict[str, Any]] = None
+    result: dict[str, Any] | None = None
     checkpoint_it = False  # False on exhausted retries means re-queued next run
 
     for attempt in range(max_retries + 1):
@@ -483,9 +454,7 @@ async def run_unit(
                     reasoning_effort,
                 )
                 stats.actual_tokens += outcome.tokens
-                result = (
-                    outcome.parsed.model_dump() if outcome.parsed is not None else None
-                )
+                result = outcome.parsed.model_dump() if outcome.parsed is not None else None
                 if outcome.refused:
                     stats.refusals += 1
                     logger.debug("[refusal, recorded null] %s", unit.key)
@@ -558,7 +527,7 @@ async def run_unit(
     pbar.update(1)
 
 
-def _retry_after(exc: RateLimitError) -> Optional[str]:
+def _retry_after(exc: RateLimitError) -> str | None:
     """The server's requested retry delay, if present (logged, not yet honored)."""
     resp = getattr(exc, "response", None)
     if resp is None:
@@ -578,7 +547,7 @@ def _retry_after(exc: RateLimitError) -> Optional[str]:
 
 async def process(
     units: list[WorkUnit],
-    results: dict[str, Optional[dict[str, Any]]],
+    results: dict[str, dict[str, Any] | None],
     stats: RunStats,
     client: AsyncAzureOpenAI,
     deployment: str,
@@ -631,7 +600,7 @@ def build_fieldnames(passthrough: list[str], enabled: list[str]) -> list[str]:
 
 def assemble_rows(
     rows: list[dict[str, Any]],
-    results: dict[str, Optional[dict[str, Any]]],
+    results: dict[str, dict[str, Any] | None],
     enabled: list[str],
     dedup: bool,
     passthrough: list[str],
@@ -650,9 +619,7 @@ def assemble_rows(
             text = row.get(section)
             if is_empty_cell(text):
                 continue
-            parsed = results.get(
-                unit_key(order_id, instance, section, str(text), dedup)
-            )
+            parsed = results.get(unit_key(order_id, instance, section, str(text), dedup))
             if parsed:
                 for name, value in parsed.items():
                     out[f"{section}_{name}"] = value
@@ -678,7 +645,7 @@ def write_csv(
 def read_jsonl(path: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     bad = 0
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for lineno, line in enumerate(f, 1):
             line = line.strip()
             if not line:
@@ -693,9 +660,7 @@ def read_jsonl(path: str) -> list[dict[str, Any]]:
     return rows
 
 
-def check_input_columns(
-    rows: list[dict[str, Any]], enabled: list[str], order_id_col: str, instance_col: str
-) -> None:
+def check_input_columns(rows: list[dict[str, Any]], enabled: list[str], order_id_col: str, instance_col: str) -> None:
     """Verify the enabled section columns are present; everything else is optional passthrough."""
     if not rows:
         return
@@ -712,9 +677,7 @@ def check_input_columns(
     # instance is only load-bearing when order_id repeats -- that's the one
     # case where rows become genuinely ambiguous without it.
     if instance_col not in present:
-        dupes = [
-            oid for oid, n in Counter(row.get(order_id_col) for row in rows).items() if n > 1
-        ]
+        dupes = [oid for oid, n in Counter(row.get(order_id_col) for row in rows).items() if n > 1]
         if dupes:
             logger.warning(
                 "column '%s' is absent but %d '%s' value(s) repeat across rows; "
@@ -735,9 +698,7 @@ async def async_main(args: argparse.Namespace) -> None:
     log_level = args.log_level or proc["log_level"]  # CLI overrides config default
     setup_logging(log_level, args.log_file)
 
-    concurrency = (
-        args.concurrency if args.concurrency is not None else proc["max_concurrency"]
-    )
+    concurrency = args.concurrency if args.concurrency is not None else proc["max_concurrency"]
     if concurrency < 1:
         raise SystemExit("--concurrency must be >= 1")
 
@@ -757,9 +718,7 @@ async def async_main(args: argparse.Namespace) -> None:
     passthrough = passthrough_columns(rows)
 
     dedup = proc["dedup"]
-    units, n_duplicates, n_skipped_empty = build_work_units(
-        rows, sections, dedup, order_id_col, instance_col
-    )
+    units, n_duplicates, n_skipped_empty = build_work_units(rows, sections, dedup, order_id_col, instance_col)
 
     checkpoint_path = Path(files["checkpoint"])
     if args.fresh and checkpoint_path.exists():
@@ -768,7 +727,7 @@ async def async_main(args: argparse.Namespace) -> None:
 
     sig = schema_signature(dedup, az["reasoning_effort"], az["deployment"])
     done = load_checkpoint(checkpoint_path, sig)
-    results: dict[str, Optional[dict[str, Any]]] = dict(done)
+    results: dict[str, dict[str, Any] | None] = dict(done)
     pending = [u for u in units if u.key not in done]
 
     n_cells = len(units) + n_duplicates
@@ -796,8 +755,7 @@ async def async_main(args: argparse.Namespace) -> None:
     elif not args.yes:
         if not sys.stdin.isatty():
             print(
-                "Non-interactive session and --yes not set; aborting without "
-                "processing. Re-run with --yes to proceed."
+                "Non-interactive session and --yes not set; aborting without processing. Re-run with --yes to proceed."
             )
             return
         try:
@@ -843,13 +801,9 @@ async def async_main(args: argparse.Namespace) -> None:
             )
         )
 
-    out_rows = assemble_rows(
-        rows, results, sections, dedup, passthrough, order_id_col, instance_col
-    )
+    out_rows = assemble_rows(rows, results, sections, dedup, passthrough, order_id_col, instance_col)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = (
-        Path(files["output_dir"]) / f"{files['output_prefix']}_{timestamp}.csv"
-    )
+    output_path = Path(files["output_dir"]) / f"{files['output_prefix']}_{timestamp}.csv"
     write_csv(out_rows, output_path, sections, passthrough)
 
     print(f"\nWrote {len(out_rows)} rows to: {output_path}")
@@ -866,15 +820,9 @@ def main() -> None:
         default=None,
         help="Only process first N input rows (smoke test)",
     )
-    parser.add_argument(
-        "--fresh", action="store_true", help="Ignore/remove existing checkpoint"
-    )
-    parser.add_argument(
-        "--concurrency", type=int, default=None, help="Override max concurrency"
-    )
-    parser.add_argument(
-        "--yes", action="store_true", help="Skip the confirmation prompt"
-    )
+    parser.add_argument("--fresh", action="store_true", help="Ignore/remove existing checkpoint")
+    parser.add_argument("--concurrency", type=int, default=None, help="Override max concurrency")
+    parser.add_argument("--yes", action="store_true", help="Skip the confirmation prompt")
     parser.add_argument(
         "--log-level",
         choices=["DEBUG", "WARNING"],
