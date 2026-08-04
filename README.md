@@ -2,6 +2,12 @@
 
 Parse free text from bone marrow pathology reports into a structured tabular format using Azure OpenAI.
 
+## A quick reminder
+
+This sends your report text to Azure OpenAI. If that text is PHI, take a
+sec to make sure that's actually okay under your institution's policies and
+applicable law before you point this at real data.
+
 ## Input
 
 The parser expects JSONL: each line is one report, already split into sections.

@@ -1,6 +1,8 @@
 *.py[oc]
 .venv
 config.yaml
+data/*
+!data/.gitkeep
 .ruff_cache/
 .pytest_cache/
 __pycache__/

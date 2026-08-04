@@ -2,12 +2,6 @@
 
 Backlog of ideas to revisit. Not scheduled — captured so we don't lose them.
 
-## Docs
-
-- **Add a PHI disclaimer to the README.** One clear statement instead of the
-  scattered per-file mentions that used to be sprinkled through the code and
-  docs (removed 2026-07-10 — they weren't helping anyone).
-
 ## Config design decisions (settled — don't re-litigate)
 
 - **Single gitignored `config.yaml` + committed `config.yaml.example` template**
