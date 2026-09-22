@@ -10,23 +10,22 @@ applicable law before you point this at real patient data.
 
 ## Input
 
-The parser expects JSONL: each line is one report split into sections.
+The parser expects JSONL: each line is one report, split into sections.
 Set the path in `config.yaml` under `files.input_jsonl`.
 
 The only required keys are the section(s) listed in `config.yaml` under
 `sections:` — the raw text of that section, e.g. `biopsy`, `aspirate`,
-`flow`, `cell_count`, `immunostains`, `specimen_header`, `final_dx`. Any of
-these can be null; null ones are just skipped.
+`flow`, `cell_count`, `immunostains`, `specimen_header`, `final_dx`.
+Nulls are allowed and skipped by default.
 
-Every other key in a line — `order_id`, `mrn`, whatever else your data has —
-is passed through to the output as-is; nothing else is required.
+Every other key in a line is passed through to the output as-is.
 
 `order_id` and `instance` get an extra job: the parser reads them to warn you
 when specimens are ambiguous (an `order_id` that repeats with no `instance`
 to tell the rows apart), and, with `dedup: false`, to key the checkpoint
-per-row instead of by content. They don't have to be called that — point
-`files.order_id_col` / `files.instance_col` at whatever your columns are
-actually named.
+per-row instead of by content. `instance` is what tells two rows under the
+same `order_id` apart when a single order covers multiple specimens (e.g.
+two biopsies). `instance` needs to be unique within an `order_id`, not globally.
 
 ## Output columns
 
@@ -41,9 +40,12 @@ parsed fields for each enabled section:
 - **specimen_header**: date (ISO `YYYY-MM-DD`)
 - **final_dx**: category (AML, ALL, MDS, MPN, CML, MDS/MPN, CMML, Lymphoma, Myeloma, Solid, Negative, Other), status (overt, residual, remission, negative)
 
-Everything's nullable. Scope is myeloid neoplasms and ALL.
-
 ## Install
+
+```bash
+git clone https://github.com/lucalanino/hemepath-parser.git
+cd hemepath-parser
+```
 
 Needs Python 3.12+.
 
@@ -53,7 +55,7 @@ With uv:
 uv sync
 ```
 
-Prefix commands below with `uv run`. Or with plain pip:
+Or with plain pip:
 
 ```bash
 python -m venv .venv
@@ -63,24 +65,32 @@ pip install -r requirements.txt
 
 ## Configure
 
+`section_parser/config.yaml.example` is the template config file with placeholder Azure values and defaults for everything else. Copy it
+to `section_parser/config.yaml` and replace placeholders.
+
 ```bash
 cp section_parser/config.yaml.example section_parser/config.yaml
 ```
 
-`config.yaml` is where your real Azure values live. At minimum, set
-`azure_openai.endpoint` and `azure_openai.deployment` (plus `tenant_id` if
-you're using `auth: browser`) — the rest of the template already has sane
-defaults.
+At minimum, set `azure_openai.endpoint` and `azure_openai.deployment` (plus
+`tenant_id` if you're using `auth: browser`).
 
 Auth (`azure_openai.auth`):
 
-- `cli` (default) — uses your `az login` session. Run that first.
-- `browser` — pops open a sign-in window; needs `tenant_id` set.
+- `cli` (default) requires an `az login` session.
+- `browser` — pops open a sign-in window, needs `tenant_id` set.
 
-The deployment has to be a gpt-5 reasoning model (`gpt-5-mini`, `gpt-5.4`) —
-older models like `gpt-4o` won't work here. `endpoint` is the resource root
-(`https://<resource>.services.ai.azure.com`), not the `/openai/v1` URL the
-Foundry portal shows.
+The deployment has to be a gpt-5 reasoning model (`gpt-5-mini`, `gpt-5.4`). 
+Older models like `gpt-4o` won't work because they do not support `reasoning_effort`.
+`endpoint` is the resource root (`https://<resource>.services.ai.azure.com`).
+
+A few more `azure_openai:` knobs worth knowing about:
+
+- `reasoning_effort` — `none`, `minimal`, `low` (default), `medium`, `high`,
+  or `xhigh`. Higher effort tends to get you more accurate parses at the cost
+  of more reasoning tokens. Changing it invalidates the checkpoint.
+- `api_version` and `scope` — these ship with working defaults in the
+  template; you shouldn't need to touch them unless Azure asks you to.
 
 Other knobs live under `processing:` in the same file:
 
@@ -92,7 +102,7 @@ Other knobs live under `processing:` in the same file:
 | `dedup` | true | parse identical section text once, reuse it everywhere it shows up |
 | `log_level` | WARNING | `DEBUG` while tuning concurrency, `WARNING` for a quiet run |
 
-`sections:` is required — it picks which sections get parsed/emitted, and
+`sections:` is required to pick which sections get parsed/emitted, and
 doubles as the list of columns your input must have (see Input above).
 
 ## Run
@@ -113,6 +123,9 @@ uv run python -m section_parser.parse_sections             # full run
 | `--log-file PATH` | also write logs to a file (metadata only, never report text) |
 
 Output lands at `data/parsed_sections_<timestamp>.csv`, one row per input line.
+The directory and filename prefix come from `files.output_dir` and
+`files.output_prefix` if you want them somewhere else; same for the
+checkpoint file's path (`files.checkpoint`).
 
 Runs are checkpointed to `data/.checkpoint.jsonl`, so if one gets interrupted
 it'll just pick back up — already-done cells aren't reprocessed. Change an
@@ -139,19 +152,12 @@ uv run pytest -m live     # 4 real calls against your deployment
 ```
 
 The live tests are deselected by default via `addopts` in `pyproject.toml`, and
-they *skip* rather than fail when `config.yaml` or an `az login` session is
-missing — so CI (`.github/workflows/ci.yml`) stays green without Azure access.
+they *skip* when `config.yaml` or an `az login` session is missing.
 
 ## Troubleshooting
 
 **Auth error at startup** — run `az login`, or if you're on `auth: browser`,
 finish the sign-in window when it pops up.
-
-**Everything comes back blank on the first run, no errors** — the model
-probably burned its token budget on reasoning instead of output. Try a
-smaller/simpler input, or add a `max_completion_tokens=...` argument to the
-`client.chat.completions.parse(...)` call in `parse_section()` in
-`section_parser/parse_sections.py` (it uses the SDK default today).
 
 **Every call fails, nothing parses** — the run report's `Non-retryable 4xx`
 line will be non-zero and the logged error names the cause: a 404 usually means

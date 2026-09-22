@@ -701,6 +701,7 @@ async def async_main(args: argparse.Namespace) -> None:
     print("Processing summary")
     print(f"{'=' * 56}")
     print(f"Input rows (instances):  {len(rows)}")
+    print(f"Dedup:                   {'on (global)' if dedup else 'off'}")
     if dedup:
         pct = (n_duplicates / n_cells * 100) if n_cells else 0.0
         print(f"Non-empty cells:         {n_cells}")
@@ -710,7 +711,6 @@ async def async_main(args: argparse.Namespace) -> None:
     print(f"Already done (skipped):  {len(units) - len(pending)}")
     print(f"To process now:          {len(pending)}")
     print(f"Sections:                {', '.join(sections)}")
-    print(f"Dedup:                   {'on (global)' if dedup else 'off'}")
     print(f"Model / deployment:      {az['deployment']}")
     print(f"Reasoning effort:        {az['reasoning_effort']}")
     print(f"Concurrency:             {concurrency}")
