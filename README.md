@@ -1,5 +1,9 @@
 # hemepath-parser
 
+[![tests](https://github.com/lucalanino/hemepath-parser/actions/workflows/ci.yml/badge.svg)](https://github.com/lucalanino/hemepath-parser/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
+
 Parse free text from bone marrow pathology reports into a structured tabular format using Azure OpenAI.
 
 ## A quick reminder
