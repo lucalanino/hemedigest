@@ -24,6 +24,9 @@ dev = [
     "ruff>=0.15.20",
 ]
 
+[tool.uv]
+default-groups = []
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]

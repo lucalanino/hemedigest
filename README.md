@@ -144,6 +144,13 @@ tests/              offline suite (no network) + opt-in live tests
 data/               inputs, outputs, checkpoint — gitignored
 ```
 
+`uv sync` alone only installs the runtime deps; pytest and ruff are a
+separate `dev` group, opt in with:
+
+```bash
+uv sync --group dev
+```
+
 Tests:
 
 ```bash
