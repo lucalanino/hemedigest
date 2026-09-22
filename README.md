@@ -125,6 +125,25 @@ the text itself.
 fingerprint covers only `dedup`, `reasoning_effort` and `deployment`. Pass
 `--fresh` after touching anything under `section_parser/schemas/`.
 
+## Development
+
+```
+section_parser/     the package: CLI, schemas, prompts
+tests/              offline suite (no network) + opt-in live tests
+data/               inputs, outputs, checkpoint — gitignored
+```
+
+Tests:
+
+```bash
+uv run pytest             # offline, free, no Azure needed
+uv run pytest -m live     # 4 real calls against your deployment
+```
+
+The live tests are deselected by default via `addopts` in `pyproject.toml`, and
+they *skip* rather than fail when `config.yaml` or an `az login` session is
+missing — so CI (`.github/workflows/ci.yml`) stays green without Azure access.
+
 ## Troubleshooting
 
 **Auth error at startup** — run `az login`, or if you're on `auth: browser`,

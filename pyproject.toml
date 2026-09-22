@@ -27,6 +27,9 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]
+# Live tests are opt-in: `pytest` stays offline, free and green; `pytest -m live` runs them.
+addopts = "-m 'not live'"
+markers = ["live: hits the real Azure OpenAI deployment (costs money, needs az login)"]
 
 [tool.ruff]
 line-length = 120
