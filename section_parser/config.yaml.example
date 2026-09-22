@@ -1,8 +1,8 @@
 # Copy to `config.yaml` and replace placeholders with real values
 
 azure_openai:
-  endpoint: "<YOUR_AZURE_OPENAI_ENDPOINT>"
-  deployment: "<YOUR_DEPLOYMENT>"
+  endpoint: "<YOUR_AZURE_OPENAI_ENDPOINT>" # "https://your_azure_endpoint.services.ai.azure.com"
+  deployment: "<YOUR_DEPLOYMENT>" # "gpt-5.4-mini"
   api_version: "2025-04-01-preview"
   scope: "https://cognitiveservices.azure.com/.default"
   auth: "cli"  # "cli" uses `az login` (tenant_id optional); "browser" requires tenant_id
