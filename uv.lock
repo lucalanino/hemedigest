@@ -273,7 +273,7 @@ wheels = [
 ]
 
 [[package]]
-name = "hemepath-parser"
+name = "hemedigest"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

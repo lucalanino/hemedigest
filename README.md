@@ -1,6 +1,6 @@
-# hemepath-parser
+# hemedigest
 
-[![tests](https://github.com/lucalanino/hemepath-parser/actions/workflows/ci.yml/badge.svg)](https://github.com/lucalanino/hemepath-parser/actions/workflows/ci.yml)
+[![tests](https://github.com/lucalanino/hemedigest/actions/workflows/ci.yml/badge.svg)](https://github.com/lucalanino/hemedigest/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
 
@@ -83,8 +83,8 @@ cells reparse with the new schema/prompt instead of being served stale.
 ## Install
 
 ```bash
-git clone https://github.com/lucalanino/hemepath-parser.git
-cd hemepath-parser
+git clone https://github.com/lucalanino/hemedigest.git
+cd hemedigest
 ```
 
 Needs Python 3.12+.

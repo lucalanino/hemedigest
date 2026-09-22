@@ -1,5 +1,5 @@
 [project]
-name = "hemepath-parser"
+name = "hemedigest"
 version = "0.1.0"
 description = "Parse bone marrow pathology report sections into structured data using Azure OpenAI structured outputs."
 readme = "README.md"
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/lucalanino/hemepath-parser"
+Repository = "https://github.com/lucalanino/hemedigest"
 
 [dependency-groups]
 dev = [
