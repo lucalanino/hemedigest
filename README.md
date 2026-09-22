@@ -8,6 +8,10 @@ This sends your report text to Azure OpenAI. If that text is PHI, take a
 sec to make sure it is actually okay under your institution's policies and
 applicable law before you point this at real patient data.
 
+You'll need an Azure subscription with an AI Foundry resource for this to work.
+
+---
+
 - [Input](#input)
 - [Output columns](#output-columns)
 - [Schemas and prompts](#schemas-and-prompts)
