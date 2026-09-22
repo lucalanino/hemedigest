@@ -57,7 +57,11 @@ class BiopsySchema(BaseModel):
     )
     fibrosis_increased: bool | None = Field(
         None,
-        description="True if marrow fibrosis is reported as increased, irrespective of any grade.",
+        description=(
+            "True if marrow fibrosis is reported as increased, irrespective of any grade. "
+            "If a grade is given and it is MF-1, MF-2 or MF-3, then this is TRUE. "
+            "If a grade of MF-0 is given, then this is FALSE."
+        ),
     )
     fibrosis_grade: int | None = Field(
         None,
