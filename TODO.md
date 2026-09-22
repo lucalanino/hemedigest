@@ -32,7 +32,7 @@ Backlog of ideas to revisit. Not scheduled — captured so we don't lose them.
 ## Concurrency tuning
 
 Now observable via the end-of-run run report (logging shipped). Default:
-`max_concurrency: 20`. The local RPM/TPM windows are gone — they paced on a token
+`max_concurrency: 5`. The local RPM/TPM windows are gone — they paced on a token
 estimate that omitted reasoning tokens, and the server's 429 is authoritative.
 
 - **Raise `--concurrency` to find the real server ceiling.** The semaphore is the only

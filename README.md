@@ -80,7 +80,7 @@ Auth (`azure_openai.auth`):
 - `cli` (default) requires an `az login` session.
 - `browser` — pops open a sign-in window, needs `tenant_id` set.
 
-The deployment has to be a gpt-5 reasoning model (`gpt-5-mini`, `gpt-5.4`). 
+The deployment has to be a gpt-5 reasoning model (`gpt-5-mini`, `gpt-5.4`).
 Older models like `gpt-4o` won't work because they do not support `reasoning_effort`.
 `endpoint` is the resource root (`https://<resource>.services.ai.azure.com`).
 
