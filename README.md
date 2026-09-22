@@ -33,7 +33,7 @@ actually named.
 Every non-section key from the input comes first, verbatim, followed by the
 parsed fields for each enabled section:
 
-- **biopsy**: cellularity_pct, cellularity_category, blasts_pct, {megakaryocytes,erythroid,myeloid}_dysplastic, fibrosis_increased, fibrosis_grade, adequacy
+- **biopsy**: cellularity_pct, cellularity_category (hypocellular, normocellular, hypercellular), blasts_pct, {megakaryocytes,erythroid,myeloid}_dysplastic, fibrosis_increased, fibrosis_grade, adequacy
 - **aspirate**: blasts_pct, {megakaryocytes,erythroid,myeloid}_dysplastic, ring_sideroblasts, ring_sideroblasts_pct, adequacy
 - **flow**: blasts_pct, adequacy, source
 - **cell_count**: blasts_pct, mast_cells_pct
@@ -117,9 +117,13 @@ uv run python -m section_parser.parse_sections             # full run
 Output lands at `data/parsed_sections_<timestamp>.csv`, one row per input line.
 
 Runs are checkpointed to `data/.checkpoint.jsonl`, so if one gets interrupted
-it'll just pick back up — already-done cells aren't reprocessed. Edit a
-section's prompt/schema or an input cell's text and only that cell reparses.
-You shouldn't need `--fresh` unless you actually want to force a full rerun.
+it'll just pick back up — already-done cells aren't reprocessed. Change an
+input cell's text and that cell reparses, since the checkpoint key is a hash of
+the text itself.
+
+**Editing a prompt or a schema does not invalidate the checkpoint** — the
+fingerprint covers only `dedup`, `reasoning_effort` and `deployment`. Pass
+`--fresh` after touching anything under `section_parser/schemas/`.
 
 ## Troubleshooting
 

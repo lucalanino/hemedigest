@@ -1,10 +1,14 @@
 """Biopsy section schema and prompt"""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from section_parser.schemas._common import COMMON_POLICY
 
 SECTION_NAME = "biopsy"
+
+CellularityCategory = Literal["hypocellular", "normocellular", "hypercellular"]
 
 PROMPT = f"""{COMMON_POLICY}
 
@@ -19,12 +23,14 @@ class BiopsySchema(BaseModel):
         None,
         description=("Overall marrow cellularity as a percentage (0-100). If a range is given, use the LARGER value."),
     )
-    cellularity_category: str | None = Field(
+    cellularity_category: CellularityCategory | None = Field(
         None,
         description=(
-            "Cellularity category exactly as stated in the report "
-            "(e.g. 'hypocellular', 'normocellular', 'hypercellular'). "
-            "Read it verbatim; do NOT infer it from the percentage."
+            "Cellularity category stated in the report, reduced to exactly one of "
+            "'hypocellular', 'normocellular', 'hypercellular'. Strip every qualifier: "
+            "'markedly hypercellular for age' -> 'hypercellular', 'mildly hypocellular' "
+            "-> 'hypocellular'. Take it from the wording only; do NOT infer it from the "
+            "cellularity percentage. If the report gives no cellularity wording, leave null."
         ),
     )
     blasts_pct: int | None = Field(
@@ -58,7 +64,8 @@ class BiopsySchema(BaseModel):
         description=(
             "Reticulin fibrosis grade per MF scale (0-3). Report ONLY if an explicit "
             "MF grade is stated. Do NOT infer a grade from adjectives such as "
-            "'moderate' or 'severe'."
+            "'moderate' or 'severe'. If two grades are given, whatever the separator "
+            "('MF-2 to MF-3', 'MF 2-3', 'MF-2/3', 'grade 2-3'), use the LARGER value."
         ),
     )
     adequacy: bool | None = Field(
