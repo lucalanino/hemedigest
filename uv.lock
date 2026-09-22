@@ -273,7 +273,7 @@ wheels = [
 ]
 
 [[package]]
-name = "hemepath-parsing"
+name = "hemepath-parser"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
