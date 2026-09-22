@@ -2,6 +2,15 @@
 
 Parse free text from bone marrow pathology reports into a structured tabular format using Azure OpenAI.
 
+- [A quick reminder](#a-quick-reminder)
+- [Input](#input)
+- [Output columns](#output-columns)
+- [Install](#install)
+- [Configure](#configure)
+- [Run](#run)
+- [Development](#development)
+- [Troubleshooting](#troubleshooting)
+
 ## A quick reminder
 
 This sends your report text to Azure OpenAI. If that text is PHI, take a
