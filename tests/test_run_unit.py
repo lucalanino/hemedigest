@@ -7,7 +7,15 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from openai import ContentFilterFinishReasonError, LengthFinishReasonError, RateLimitError
+from openai import (
+    AuthenticationError,
+    BadRequestError,
+    ContentFilterFinishReasonError,
+    LengthFinishReasonError,
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitError,
+)
 
 from section_parser import parse_sections as ps
 from section_parser.parse_sections import RateLimiter, WorkUnit, process, run_unit
@@ -228,3 +236,70 @@ async def test_retry_backoff_follows_exponential_formula(fake_client, unit, gene
     # retry_base_delay * 2**attempt for each retryable, non-final attempt (0, 1);
     # the final, exhausted attempt breaks out without sleeping again
     assert sleep_calls == [1.0, 2.0]
+
+
+def make_bad_request_error(code=None, message="Unrecognized request argument supplied: reasoning_effort"):
+    response = httpx.Response(status_code=400, request=httpx.Request("POST", "https://example.com"))
+    body = {"message": message, "code": code, "param": "prompt", "type": None} if code else None
+    return BadRequestError(message, response=response, body=body)
+
+
+async def test_bad_request_fails_fast_without_retrying(fake_client, unit, generous_limiter):
+    """A deterministic 400 must not burn the retry budget."""
+    fake_client.chat.completions.parse.side_effect = [make_bad_request_error() for _ in range(5)]
+    checkpoint, results, stats, pbar = await run_it(unit, fake_client, generous_limiter, max_retries=4)
+
+    assert stats.calls == 1  # one attempt, not max_retries + 1
+    assert stats.fatal_api_errors == 1
+    assert stats.retries == 0
+    assert stats.other_retryable == 0
+    assert checkpoint.writes == []  # re-queued for the next run once the config is fixed
+    assert pbar.updates == 1
+
+
+@pytest.mark.parametrize(
+    "exc_factory",
+    [
+        lambda: AuthenticationError(
+            "token rejected",
+            response=httpx.Response(401, request=httpx.Request("POST", "https://example.com")),
+            body=None,
+        ),
+        lambda: PermissionDeniedError(
+            "missing role",
+            response=httpx.Response(403, request=httpx.Request("POST", "https://example.com")),
+            body=None,
+        ),
+        lambda: NotFoundError(
+            "deployment not found",
+            response=httpx.Response(404, request=httpx.Request("POST", "https://example.com")),
+            body=None,
+        ),
+    ],
+    ids=["401", "403", "404"],
+)
+async def test_auth_and_deployment_errors_fail_fast(fake_client, unit, generous_limiter, exc_factory):
+    fake_client.chat.completions.parse.side_effect = [exc_factory()]
+    checkpoint, results, stats, pbar = await run_it(unit, fake_client, generous_limiter, max_retries=4)
+
+    assert stats.calls == 1
+    assert stats.fatal_api_errors == 1
+    assert checkpoint.writes == []
+
+
+async def test_prompt_content_filter_400_records_null_and_checkpoints(fake_client, unit, generous_limiter):
+    """A 400 carrying code=content_filter is a permanent null, not a config error."""
+    fake_client.chat.completions.parse.side_effect = [make_bad_request_error(code="content_filter")]
+    checkpoint, results, stats, pbar = await run_it(unit, fake_client, generous_limiter)
+
+    assert stats.content_filter_nulls == 1
+    assert stats.fatal_api_errors == 0
+    assert results[unit.key] is None
+    assert checkpoint.writes == [(unit.key, None)]
+
+
+async def test_first_seen_reports_each_error_kind_once():
+    stats = RunStats()
+    assert stats.first_seen("fatal:400") is True
+    assert stats.first_seen("fatal:400") is False
+    assert stats.first_seen("fatal:401") is True

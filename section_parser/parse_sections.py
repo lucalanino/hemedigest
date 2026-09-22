@@ -26,8 +26,12 @@ from azure.identity import (
 )
 from openai import (
     AsyncAzureOpenAI,
+    AuthenticationError,
+    BadRequestError,
     ContentFilterFinishReasonError,
     LengthFinishReasonError,
+    NotFoundError,
+    PermissionDeniedError,
     RateLimitError,
 )
 from pydantic import BaseModel
@@ -478,6 +482,22 @@ async def run_unit(
                 )
                 checkpoint_it = True
                 break
+            except (BadRequestError, AuthenticationError, PermissionDeniedError, NotFoundError) as exc:
+                # Azure returns a prompt-side content filter as a 400, not a finish reason.
+                if getattr(exc, "code", None) == "content_filter":
+                    stats.content_filter_nulls += 1
+                    logger.debug("[prompt content filter, recorded null] %s", unit.key)
+                    checkpoint_it = True
+                    break
+                # Bad endpoint/api_version/deployment or missing role: retrying only hides it.
+                # Not checkpointed, so a re-run retries once the config is fixed.
+                stats.fatal_api_errors += 1
+                status = getattr(exc, "status_code", "?")
+                if stats.first_seen(f"fatal:{status}"):
+                    logger.error("[HTTP %s, not retryable -- fix and re-run] %s: %s", status, unit.key, exc)
+                else:
+                    logger.debug("[HTTP %s, not retryable] %s", status, unit.key)
+                break
             except RateLimitError as exc:
                 stats.http_429 += 1
                 retry_after = _retry_after(exc)
@@ -500,6 +520,9 @@ async def run_unit(
                 )
             except Exception as exc:  # noqa: BLE001
                 stats.other_retryable += 1
+                # One line per error kind, so a systematic failure isn't silent at WARNING.
+                if stats.first_seen(f"retryable:{type(exc).__name__}"):
+                    logger.warning("[retryable error, backing off] %s: %s", unit.key, exc)
                 if attempt >= max_retries:
                     stats.exhausted_failures += 1
                     logger.error(

@@ -1,7 +1,7 @@
 """Run-time logging, stats, and the end-of-run report for the section parser."""
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from tqdm import tqdm
@@ -61,10 +61,20 @@ class RunStats:
     retries: int = 0
     http_429: int = 0
     other_retryable: int = 0
+    fatal_api_errors: int = 0
     actual_tokens: int = 0
     calls: int = 0
     inflight: int = 0  # measured at the call site, not the semaphore (which overstates in-flight work)
     peak_inflight: int = 0
+
+    _seen_error_kinds: set[str] = field(default_factory=set)
+
+    def first_seen(self, kind: str) -> bool:
+        """True the first time a given error kind appears; keeps one failure to one line."""
+        if kind in self._seen_error_kinds:
+            return False
+        self._seen_error_kinds.add(kind)
+        return True
 
     def note_inflight_start(self) -> None:
         self.inflight += 1
@@ -111,6 +121,7 @@ def format_run_report(
     lines.append(f"  Retries scheduled:     {stats.retries}")
     lines.append(f"  HTTP 429 responses:    {stats.http_429}")
     lines.append(f"  Other errors:          {stats.other_retryable}")
+    lines.append(f"  Non-retryable 4xx:     {stats.fatal_api_errors}")
 
     lines.append("Throughput")
     lines.append(f"  Wall time:             {elapsed:.1f}s")
@@ -135,6 +146,11 @@ def format_run_report(
 
 def _verdict(stats: RunStats, limiter, max_concurrency: int) -> str:
     """One-line, actionable read on which limit is binding."""
+    if stats.fatal_api_errors > 0:
+        return (
+            "non-retryable 4xx from Azure -- nothing was parsed; check the logged error above "
+            "(api_version, deployment name, or RBAC on the resource)."
+        )
     if stats.http_429 > 0:
         return "server throttling (429s hit) -- lower target_rpm/target_tpm or --concurrency, or honor Retry-After."
     if limiter.blocked_seconds >= 1.0:

@@ -77,8 +77,10 @@ Auth (`azure_openai.auth`):
 - `cli` (default) — uses your `az login` session. Run that first.
 - `browser` — pops open a sign-in window; needs `tenant_id` set.
 
-The deployment has to be a gpt-5 reasoning model (`gpt-5.4` etc.) — older
-models like `gpt-4o` won't work here.
+The deployment has to be a gpt-5 reasoning model (`gpt-5-mini`, `gpt-5.4`) —
+older models like `gpt-4o` won't work here. `endpoint` is the resource root
+(`https://<resource>.services.ai.azure.com`), not the `/openai/v1` URL the
+Foundry portal shows.
 
 Other knobs live under `processing:` in the same file:
 
@@ -129,6 +131,11 @@ probably burned its token budget on reasoning instead of output. Try a
 smaller/simpler input, or add a `max_completion_tokens=...` argument to the
 `client.chat.completions.parse(...)` call in `parse_section()` in
 `section_parser/parse_sections.py` (it uses the SDK default today).
+
+**Every call fails, nothing parses** — the run report's `Non-retryable 4xx`
+line will be non-zero and the logged error names the cause: a 404 usually means
+the endpoint carries an API path or the deployment name is wrong, a 401/403
+means the identity lacks a role on the resource.
 
 **Lots of HTTP 429s in the run report** — turn down `target_rpm`/`target_tpm`
 or `--concurrency`.
