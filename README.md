@@ -10,6 +10,7 @@ applicable law before you point this at real patient data.
 
 - [Input](#input)
 - [Output columns](#output-columns)
+- [Schemas and prompts](#schemas-and-prompts)
 - [Install](#install)
 - [Configure](#configure)
 - [Run](#run)
@@ -47,6 +48,29 @@ parsed fields for each enabled section:
 - **immunostains**: blasts_pct
 - **specimen_header**: date (ISO `YYYY-MM-DD`)
 - **final_dx**: category (AML, ALL, MDS, MPN, CML, MDS/MPN, CMML, Lymphoma, Myeloma, Solid, Negative, Other), status (overt, residual, remission, negative)
+
+## Schemas and prompts
+
+Each section's schema and prompt live together in one module under
+`section_parser/schemas/`, e.g. `biopsy.py` has `SECTION_NAME`, `PROMPT`, and
+`SCHEMA` (a pydantic `BaseModel` — one field per output column, with the
+field's `description` doubling as the instruction the model sees for it).
+`section_parser/schemas/__init__.py` collects every module into `SECTIONS`,
+which is what the rest of the parser reads from — nothing else needs to
+change when you add a section.
+
+To edit an existing section, just change its schema fields or prompt text
+directly in that module. To add a new one, copy an existing module as a
+starting point, give it a unique `SECTION_NAME`, and register it in the
+`_MODULES` tuple in `schemas/__init__.py`; then add that name to `sections:`
+in `config.yaml` so it's actually parsed. Shared instructions that apply
+across sections (scope, general extraction rules) live in
+`schemas/_common.py`'s `COMMON_POLICY` — pull that into a new prompt rather
+than repeating it.
+
+**Editing a prompt or a schema does not invalidate the checkpoint** on its
+own (see Run below) — pass `--fresh` after a change so already-checkpointed
+cells reparse with the new schema/prompt instead of being served stale.
 
 ## Install
 
