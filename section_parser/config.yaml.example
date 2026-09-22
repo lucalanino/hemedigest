@@ -3,10 +3,10 @@
 azure_openai:
   endpoint: "<YOUR_AZURE_OPENAI_ENDPOINT>"
   deployment: "<YOUR_DEPLOYMENT>"
-  api_version: "2024-12-01-preview"
-  tenant_id: "<YOUR_TENANT_ID>" # needed only for browser auth, see below
+  api_version: "2025-04-01-preview"
   scope: "https://cognitiveservices.azure.com/.default"
   auth: "cli"  # "cli" uses `az login` (tenant_id optional); "browser" requires tenant_id
+  tenant_id: "<YOUR_TENANT_ID>" # needed only for browser auth, optional for cli
   reasoning_effort: "low"  # none | minimal | low | medium | high | xhigh
 
 files:
@@ -17,8 +17,7 @@ files:
   order_id_col: "order_id"  # optional, only used to key checkpoint records when dedup: false
   instance_col: "instance"  # optional, only used to warn on ambiguous order_id repeats
 
-# Required: list the section(s) to parse. Also the set of columns required in the
-# input -- everything else in a row is passed through to the output as-is.
+# Required: list the section(s) to parse, everything else in a row is passed through to the output as-is.
 sections:
   - biopsy
   - aspirate
