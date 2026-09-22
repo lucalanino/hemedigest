@@ -140,7 +140,7 @@ def load_config(config_path: str) -> dict[str, Any]:
     elif not isinstance(proc, dict):
         raise SystemExit("Config 'processing' must be a mapping of settings, not a list/scalar.")
     config["processing"] = proc
-    proc.setdefault("max_concurrency", 20)
+    proc.setdefault("max_concurrency", 5)
     proc.setdefault("max_retries", 5)
     proc.setdefault("retry_base_delay", 2.0)
 

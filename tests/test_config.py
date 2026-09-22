@@ -138,7 +138,7 @@ def test_processing_defaults_applied_when_omitted(tmp_path):
     path = write_raw(tmp_path, cfg)
     config = load_config(str(path))
     proc = config["processing"]
-    assert proc["max_concurrency"] == 20
+    assert proc["max_concurrency"] == 5
     assert proc["max_retries"] == 5
     assert proc["retry_base_delay"] == 2.0
     assert proc["dedup"] is True

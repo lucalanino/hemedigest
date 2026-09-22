@@ -28,7 +28,7 @@ sections:
   - final_dx
 
 processing:
-  max_concurrency: 20
+  max_concurrency: 5
   max_retries: 5
   retry_base_delay: 2.0
   log_level: "WARNING"  # DEBUG (tune concurrency) | WARNING (quiet); CLI --log-level overrides

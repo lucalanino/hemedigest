@@ -86,7 +86,7 @@ Other knobs live under `processing:` in the same file:
 
 | key | default | meaning |
 |---|---|---|
-| `max_concurrency` | 20 | max requests in flight at once |
+| `max_concurrency` | 5 | max requests in flight at once |
 | `max_retries` | 5 | retries per cell before it's left for the next run |
 | `retry_base_delay` | 2.0 | backoff base, in seconds |
 | `dedup` | true | parse identical section text once, reuse it everywhere it shows up |
