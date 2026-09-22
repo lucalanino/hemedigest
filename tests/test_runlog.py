@@ -1,6 +1,5 @@
 import logging
 import os
-from types import SimpleNamespace
 
 from section_parser.runlog import (
     LOGGER_NAME,
@@ -10,15 +9,6 @@ from section_parser.runlog import (
     get_logger,
     setup_logging,
 )
-
-
-def make_limiter(blocked_seconds=0.0, blocked_events=0, rpm_blocks=0, tpm_blocks=0):
-    return SimpleNamespace(
-        blocked_seconds=blocked_seconds,
-        blocked_events=blocked_events,
-        rpm_blocks=rpm_blocks,
-        tpm_blocks=tpm_blocks,
-    )
 
 
 def test_note_inflight_tracks_current_and_peak():
@@ -35,58 +25,42 @@ def test_note_inflight_tracks_current_and_peak():
     assert stats.peak_inflight == 2  # back to the prior peak, not exceeded
 
 
-def test_verdict_server_429s_takes_priority():
+def test_verdict_fatal_4xx_takes_priority():
+    stats = RunStats(fatal_api_errors=3, http_429=1, peak_inflight=20)
+    assert "non-retryable 4xx" in _verdict(stats, max_concurrency=20)
+
+
+def test_verdict_server_429s():
     stats = RunStats(http_429=3)
-    limiter = make_limiter(blocked_seconds=5.0, rpm_blocks=1)
-    assert "server throttling" in _verdict(stats, limiter, max_concurrency=20)
+    verdict = _verdict(stats, max_concurrency=20)
+    assert "server throttling" in verdict
+    assert "3 429s" in verdict
 
 
-def test_verdict_rpm_dominant_local_limiter():
-    stats = RunStats()
-    limiter = make_limiter(blocked_seconds=2.0, rpm_blocks=5, tpm_blocks=1)
-    verdict = _verdict(stats, limiter, max_concurrency=20)
-    assert "local rate limiter binding" in verdict
-    assert "RPM" in verdict
-
-
-def test_verdict_tpm_dominant_local_limiter():
-    stats = RunStats()
-    limiter = make_limiter(blocked_seconds=2.0, rpm_blocks=1, tpm_blocks=5)
-    verdict = _verdict(stats, limiter, max_concurrency=20)
-    assert "local rate limiter binding" in verdict
-    assert "TPM" in verdict
-
-
-def test_verdict_semaphore_binding():
+def test_verdict_concurrency_binding():
     stats = RunStats(peak_inflight=20)
-    limiter = make_limiter()
-    verdict = _verdict(stats, limiter, max_concurrency=20)
-    assert "semaphore binding" in verdict
+    assert "concurrency binding" in _verdict(stats, max_concurrency=20)
 
 
-def test_verdict_headroom():
+def test_verdict_not_saturated():
     stats = RunStats(peak_inflight=5)
-    limiter = make_limiter()
-    verdict = _verdict(stats, limiter, max_concurrency=20)
-    assert "headroom" in verdict
+    assert "not saturated" in _verdict(stats, max_concurrency=20)
 
 
 def test_format_run_report_includes_key_figures():
-    stats = RunStats(parsed_ok=7, calls=8, actual_tokens=1000)
-    limiter = make_limiter()
-    report = format_run_report(
-        stats,
-        limiter,
-        elapsed=10.0,
-        max_concurrency=20,
-        target_rpm=2000,
-        target_tpm=200000,
-        skipped_empty=2,
-    )
+    stats = RunStats(parsed_ok=7, calls=8, actual_tokens=1000, peak_inflight=4)
+    report = format_run_report(stats, elapsed=10.0, max_concurrency=20, skipped_empty=2)
     assert "Parsed OK:             7" in report
     assert "Calls made:            8" in report
     assert "Skipped empty/NA:      2" in report
+    assert "Peak in-flight:        4 / 20 max" in report
     assert "Verdict:" in report
+
+
+def test_format_run_report_has_no_rate_limiter_section():
+    report = format_run_report(RunStats(), elapsed=1.0, max_concurrency=20, skipped_empty=0)
+    for gone in ("Rate-limiter", "target", "RPM (avg):    0 /"):
+        assert gone not in report
 
 
 def test_setup_logging_returns_named_logger():

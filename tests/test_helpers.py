@@ -4,7 +4,6 @@ from pydantic import BaseModel
 from section_parser.parse_sections import (
     ALL_SECTIONS,
     _is_placeholder,
-    estimate_tokens,
     is_empty_cell,
     schema_signature,
     section_fingerprint,
@@ -65,19 +64,6 @@ def test_selected_instance_sections_filters_and_preserves_canonical_order():
 def test_selected_instance_sections_excludes_unlisted():
     result = selected_instance_sections([ALL_SECTIONS[0]])
     assert list(result) == [ALL_SECTIONS[0]]
-
-
-# ---- estimate_tokens ----------------------------------------------------
-
-
-def test_estimate_tokens_formula():
-    prompt = "a" * 100
-    text = "b" * 200
-    assert estimate_tokens(prompt, text) == (100 + 200) // 4 + 800
-
-
-def test_estimate_tokens_empty_inputs():
-    assert estimate_tokens("", "") == 800
 
 
 # ---- schema_signature ----------------------------------------------------

@@ -87,12 +87,10 @@ Other knobs live under `processing:` in the same file:
 | key | default | meaning |
 |---|---|---|
 | `max_concurrency` | 20 | max requests in flight at once |
-| `target_rpm` | 2000 | requests/min ceiling |
-| `target_tpm` | 200000 | tokens/min ceiling |
 | `max_retries` | 5 | retries per cell before it's left for the next run |
 | `retry_base_delay` | 2.0 | backoff base, in seconds |
 | `dedup` | true | parse identical section text once, reuse it everywhere it shows up |
-| `log_level` | WARNING | `DEBUG` for tuning concurrency/rate-limit knobs, `WARNING` for a quiet run |
+| `log_level` | WARNING | `DEBUG` while tuning concurrency, `WARNING` for a quiet run |
 
 `sections:` is required — it picks which sections get parsed/emitted, and
 doubles as the list of columns your input must have (see Input above).
@@ -160,12 +158,13 @@ line will be non-zero and the logged error names the cause: a 404 usually means
 the endpoint carries an API path or the deployment name is wrong, a 401/403
 means the identity lacks a role on the resource.
 
-**Lots of HTTP 429s in the run report** — turn down `target_rpm`/`target_tpm`
-or `--concurrency`.
+**Lots of HTTP 429s in the run report** — turn down `--concurrency`. Retries
+honour the server's `Retry-After` when it sends one, so a few 429s cost little;
+sustained ones mean you're above the deployment's quota.
 
-**Run feels slow** — the end-of-run report prints a verdict line telling you
-whether concurrency, the rate targets, or the server itself is the actual
-bottleneck, so you know what to raise.
+**Run feels slow** — the end-of-run report's verdict line says whether
+concurrency or the server was the bottleneck. Peak in-flight at the max with no
+429s means `--concurrency` is worth raising.
 
 **Config errors at startup** — the error message names the exact key in
 `config.yaml` that's missing or wrong.

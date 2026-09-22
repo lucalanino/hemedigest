@@ -91,11 +91,8 @@ def _rate(count: float, elapsed: float) -> float:
 
 def format_run_report(
     stats: RunStats,
-    limiter,
     elapsed: float,
     max_concurrency: int,
-    target_rpm: int,
-    target_tpm: int,
     skipped_empty: int,
 ) -> str:
     """Build the end-of-run report: outcomes, throughput, and the binding constraint."""
@@ -126,40 +123,25 @@ def format_run_report(
     lines.append("Throughput")
     lines.append(f"  Wall time:             {elapsed:.1f}s")
     lines.append(f"  Calls made:            {stats.calls}")
-    lines.append(f"  Achieved RPM (avg):    {achieved_rpm:.0f} / {target_rpm} target")
-    lines.append(f"  Achieved TPM (avg):    {achieved_tpm:.0f} / {target_tpm} target")
+    lines.append(f"  Achieved RPM (avg):    {achieved_rpm:.0f}")
+    lines.append(f"  Achieved TPM (avg):    {achieved_tpm:.0f}")
     lines.append(f"  Actual tokens total:   {stats.actual_tokens} (~{avg_tokens:.0f}/call)")
-
-    lines.append("Limits")
     lines.append(f"  Peak in-flight:        {stats.peak_inflight} / {max_concurrency} max")
-    lines.append(
-        f"  Rate-limiter blocks:   {limiter.blocked_events} "
-        f"(rpm {limiter.rpm_blocks}, tpm {limiter.tpm_blocks}), "
-        f"{limiter.blocked_seconds:.1f}s waiting"
-    )
-    lines.append(f"  Server 429s:           {stats.http_429}")
 
-    lines.append(f"Verdict: {_verdict(stats, limiter, max_concurrency)}")
+    lines.append(f"Verdict: {_verdict(stats, max_concurrency)}")
     lines.append(bar)
     return "\n".join(lines)
 
 
-def _verdict(stats: RunStats, limiter, max_concurrency: int) -> str:
-    """One-line, actionable read on which limit is binding."""
+def _verdict(stats: RunStats, max_concurrency: int) -> str:
+    """One-line, actionable read on what limited the run."""
     if stats.fatal_api_errors > 0:
         return (
             "non-retryable 4xx from Azure -- nothing was parsed; check the logged error above "
             "(api_version, deployment name, or RBAC on the resource)."
         )
     if stats.http_429 > 0:
-        return "server throttling (429s hit) -- lower target_rpm/target_tpm or --concurrency, or honor Retry-After."
-    if limiter.blocked_seconds >= 1.0:
-        which = "RPM" if limiter.rpm_blocks >= limiter.tpm_blocks else "TPM"
-        return (
-            f"local rate limiter binding (mostly {which}) -- raise target_{which.lower()} if your Azure quota allows."
-        )
+        return f"server throttling ({stats.http_429} 429s) -- lower --concurrency if the retries cost real time."
     if stats.peak_inflight >= max_concurrency:
-        return (
-            "semaphore binding (peak in-flight hit max) with rate-limit headroom -- raise --concurrency to go faster."
-        )
-    return "headroom on all limits -- not saturated; more input or concurrency would use it."
+        return "concurrency binding (peak in-flight hit max) with no throttling -- raise --concurrency to go faster."
+    return "not saturated -- neither concurrency nor the server limited this run."

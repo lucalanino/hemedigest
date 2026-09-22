@@ -29,9 +29,7 @@ sections:
 
 processing:
   max_concurrency: 20
-  target_rpm: 2000
-  target_tpm: 200000
   max_retries: 5
   retry_base_delay: 2.0
-  log_level: "WARNING"  # DEBUG (tune concurrency/rate limits) | WARNING (quiet); CLI --log-level overrides
+  log_level: "WARNING"  # DEBUG (tune concurrency) | WARNING (quiet); CLI --log-level overrides
   dedup: true  # parse byte-identical section text once and fan out the result; toggling mid-run invalidates the checkpoint

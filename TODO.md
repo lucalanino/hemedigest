@@ -29,19 +29,17 @@ Backlog of ideas to revisit. Not scheduled — captured so we don't lose them.
 - **Stay on YAML** (comments carry real explanation; shallow nesting). Watch the Norway
   problem — quote stringy scalars (`no`/`yes`/`on`/`off`, version strings).
 
-## Concurrency & rate-limit tuning
+## Concurrency tuning
 
-Now observable via the end-of-run run report (logging shipped). Defaults:
-`max_concurrency: 20`, `target_rpm: 2000` / `target_tpm: 200000`.
+Now observable via the end-of-run run report (logging shipped). Default:
+`max_concurrency: 20`. The local RPM/TPM windows are gone — they paced on a token
+estimate that omitted reasoning tokens, and the server's 429 is authoritative.
 
-- **Raise `--concurrency` to find the real server ceiling.** At 20 the limiter never
-  blocks (20 in-flight reasoning calls ≪ 2000 RPM), so the semaphore is the sole gate —
-  which is also why progress comes in lockstep waves. The first sustained 429s mark the
-  ceiling; that's when the `RateLimiter` starts earning its keep. The report's verdict
-  says which limit is binding.
-- **Consider honoring `Retry-After`** instead of the current fixed exponential backoff. A
-  429 is rejected before processing (zero tokens billed), so the only cost is wasted
-  wall-clock; the header is already logged.
+- **Raise `--concurrency` to find the real server ceiling.** The semaphore is the only
+  gate, which is why progress comes in lockstep waves. The first sustained 429s mark
+  the ceiling; the report's verdict says whether concurrency or the server was binding.
+- ~~Consider honoring `Retry-After`~~ — done: a 429 now waits the server's figure when
+  it exceeds the backoff curve, and the curve otherwise.
 
 
 # ACTUAL TODOS

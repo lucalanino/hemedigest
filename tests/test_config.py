@@ -139,8 +139,6 @@ def test_processing_defaults_applied_when_omitted(tmp_path):
     config = load_config(str(path))
     proc = config["processing"]
     assert proc["max_concurrency"] == 20
-    assert proc["target_rpm"] == 2000
-    assert proc["target_tpm"] == 200000
     assert proc["max_retries"] == 5
     assert proc["retry_base_delay"] == 2.0
     assert proc["dedup"] is True
@@ -153,21 +151,21 @@ def test_processing_not_a_mapping_raises(config_factory):
         load_config(str(path))
 
 
-@pytest.mark.parametrize("field", ["max_concurrency", "target_rpm", "target_tpm"])
+@pytest.mark.parametrize("field", ["max_concurrency"])
 def test_processing_positive_int_fields_reject_non_positive(config_factory, field):
     path = config_factory({"processing": {field: 0}})
     with pytest.raises(SystemExit, match=field):
         load_config(str(path))
 
 
-@pytest.mark.parametrize("field", ["max_concurrency", "target_rpm", "target_tpm"])
+@pytest.mark.parametrize("field", ["max_concurrency"])
 def test_processing_positive_int_fields_reject_non_int(config_factory, field):
     path = config_factory({"processing": {field: "twenty"}})
     with pytest.raises(SystemExit, match=field):
         load_config(str(path))
 
 
-@pytest.mark.parametrize("field", ["max_concurrency", "target_rpm", "target_tpm"])
+@pytest.mark.parametrize("field", ["max_concurrency"])
 def test_processing_positive_int_fields_reject_bool(config_factory, field):
     path = config_factory({"processing": {field: True}})
     with pytest.raises(SystemExit, match=field):

@@ -12,7 +12,7 @@ import hashlib
 import json
 import sys
 import time
-from collections import Counter, deque
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -47,10 +47,9 @@ from section_parser.schemas import SECTIONS as INSTANCE_SECTIONS
 
 logger = get_logger()
 
-# All sections the parser knows how to handle, in output order.
 ALL_SECTIONS: list[str] = list(INSTANCE_SECTIONS)
 
-# Placeholder tokens treated as empty, matched case-insensitively on the whole stripped cell.
+# Placeholder tokens treated as empty
 EMPTY_SENTINELS = {"na", "n/a", "none", "nil", "null", "-", "--", "."}
 
 
@@ -70,7 +69,7 @@ def selected_instance_sections(
 
 
 def _is_placeholder(value: Any) -> bool:
-    """A "<" anywhere catches half-edited values like "https://<resource>...", not just "<YOUR_...>"."""
+    """A "<" anywhere catches half-edited values."""
     return not value or (isinstance(value, str) and "<" in value)
 
 
@@ -142,16 +141,13 @@ def load_config(config_path: str) -> dict[str, Any]:
         raise SystemExit("Config 'processing' must be a mapping of settings, not a list/scalar.")
     config["processing"] = proc
     proc.setdefault("max_concurrency", 20)
-    proc.setdefault("target_rpm", 2000)
-    proc.setdefault("target_tpm", 200000)
     proc.setdefault("max_retries", 5)
     proc.setdefault("retry_base_delay", 2.0)
 
-    for field in ("max_concurrency", "target_rpm", "target_tpm"):
-        v = proc[field]
-        # bool is an int subclass in Python, so exclude it or `true` would silently pass as 1.
-        if isinstance(v, bool) or not isinstance(v, int) or v < 1:
-            raise SystemExit(f"Config 'processing.{field}' must be a positive integer; got {v!r}.")
+    v = proc["max_concurrency"]
+    # bool is an int subclass in Python, so exclude it or `true` would silently pass as 1.
+    if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+        raise SystemExit(f"Config 'processing.max_concurrency' must be a positive integer; got {v!r}.")
 
     v = proc["max_retries"]
     if isinstance(v, bool) or not isinstance(v, int) or v < 0:
@@ -240,63 +236,6 @@ async def parse_section(
     if getattr(message, "refusal", None):
         return CallOutcome(parsed=None, refused=True, tokens=tokens)
     return CallOutcome(parsed=message.parsed, refused=False, tokens=tokens)
-
-
-class RateLimiter:
-    """Semaphore caps in-flight requests; sliding 60s RPM/TPM windows pace the start rate against Azure quota."""
-
-    def __init__(self, max_concurrency: int, target_rpm: int, target_tpm: int):
-        self.sem = asyncio.Semaphore(max_concurrency)
-        self.target_rpm = target_rpm
-        self.target_tpm = target_tpm
-        self._requests: deque[float] = deque()
-        self._tokens: deque[tuple[float, int]] = deque()
-        self._lock = asyncio.Lock()
-        # Observability only (end-of-run report), never gates behavior.
-        self.blocked_events = 0
-        self.blocked_seconds = 0.0
-        self.rpm_blocks = 0
-        self.tpm_blocks = 0
-
-    def _purge(self, now: float) -> None:
-        cutoff = now - 60.0
-        while self._requests and self._requests[0] < cutoff:
-            self._requests.popleft()
-        while self._tokens and self._tokens[0][0] < cutoff:
-            self._tokens.popleft()
-
-    async def acquire(self, est_tokens: int) -> None:
-        """Block until issuing a request with ``est_tokens`` stays within limits."""
-        # Clamp so an oversized request still passes an empty window (no infinite spin).
-        est_tokens = min(est_tokens, self.target_tpm)
-        wait_start: float | None = None
-        while True:
-            async with self._lock:
-                now = time.monotonic()
-                self._purge(now)
-                tok_sum = sum(t for _, t in self._tokens)
-                rpm_ok = len(self._requests) < self.target_rpm
-                tpm_ok = tok_sum + est_tokens <= self.target_tpm
-                if rpm_ok and tpm_ok:
-                    self._requests.append(now)
-                    self._tokens.append((now, est_tokens))
-                    if wait_start is not None:
-                        self.blocked_events += 1
-                        self.blocked_seconds += now - wait_start
-                    return
-                # Record which ceiling forced the wait (both may trip at once).
-                if not rpm_ok:
-                    self.rpm_blocks += 1
-                if not tpm_ok:
-                    self.tpm_blocks += 1
-                if wait_start is None:
-                    wait_start = now
-            await asyncio.sleep(0.5)
-
-
-def estimate_tokens(system_prompt: str, text: str) -> int:
-    """Rough token estimate (~chars/4) + headroom with intentional overestimation (800)"""
-    return (len(system_prompt) + len(text)) // 4 + 800
 
 
 def schema_signature(dedup: bool, reasoning_effort: str, deployment: str) -> str:
@@ -430,7 +369,7 @@ async def run_unit(
     unit: WorkUnit,
     client: AsyncAzureOpenAI,
     deployment: str,
-    limiter: RateLimiter,
+    sem: asyncio.Semaphore,
     checkpoint: CheckpointWriter,
     results: dict[str, dict[str, Any] | None],
     stats: RunStats,
@@ -439,13 +378,12 @@ async def run_unit(
     reasoning_effort: str,
     pbar: tqdm,
 ) -> None:
-    est = estimate_tokens(unit.prompt, unit.text)
     result: dict[str, Any] | None = None
     checkpoint_it = False  # False on exhausted retries means re-queued next run
+    server_delay: float | None = None  # Retry-After from the last 429, if any
 
     for attempt in range(max_retries + 1):
-        async with limiter.sem:  # backoff sleep below runs outside the slot
-            await limiter.acquire(est)  # re-acquired per attempt so retries count too
+        async with sem:  # the backoff sleep below runs outside the slot
             stats.calls += 1
             stats.note_inflight_start()
             try:
@@ -511,12 +449,13 @@ async def run_unit(
                     )
                     break
                 stats.retries += 1
+                server_delay = retry_after
                 logger.warning(
                     "[429, backing off] %s (attempt %d/%d)%s",
                     unit.key,
                     attempt + 1,
                     max_retries + 1,
-                    f", Retry-After={retry_after}" if retry_after else "",
+                    f", Retry-After={retry_after:.1f}s" if retry_after is not None else "",
                 )
             except Exception as exc:  # noqa: BLE001
                 stats.other_retryable += 1
@@ -541,8 +480,11 @@ async def run_unit(
                 )
             finally:
                 stats.note_inflight_end()
-        # only reached on a retryable, non-final failure
-        await asyncio.sleep(retry_base_delay * (2**attempt))
+        # only reached on a retryable, non-final failure; the server's own figure
+        # wins over the backoff curve when a 429 supplied one.
+        backoff = retry_base_delay * (2**attempt)
+        await asyncio.sleep(max(server_delay, backoff) if server_delay is not None else backoff)
+        server_delay = None
 
     results[unit.key] = result
     if checkpoint_it:
@@ -550,8 +492,8 @@ async def run_unit(
     pbar.update(1)
 
 
-def _retry_after(exc: RateLimitError) -> str | None:
-    """The server's requested retry delay, if present (logged, not yet honored)."""
+def _retry_after(exc: RateLimitError) -> float | None:
+    """The server's requested retry delay in seconds, if it sent one."""
     resp = getattr(exc, "response", None)
     if resp is None:
         return None
@@ -559,12 +501,13 @@ def _retry_after(exc: RateLimitError) -> str | None:
         headers = resp.headers
     except Exception:  # noqa: BLE001
         return None
-    ms = headers.get("retry-after-ms")
-    if ms is not None:
-        return f"{ms}ms"
-    secs = headers.get("retry-after")
-    if secs is not None:
-        return f"{secs}s"
+    for name, scale in (("retry-after-ms", 0.001), ("retry-after", 1.0)):
+        raw = headers.get(name)
+        if raw is not None:
+            try:
+                return float(raw) * scale
+            except (TypeError, ValueError):
+                return None
     return None
 
 
@@ -574,7 +517,7 @@ async def process(
     stats: RunStats,
     client: AsyncAzureOpenAI,
     deployment: str,
-    limiter: RateLimiter,
+    sem: asyncio.Semaphore,
     checkpoint: CheckpointWriter,
     max_retries: int,
     retry_base_delay: float,
@@ -587,7 +530,7 @@ async def process(
                     unit,
                     client,
                     deployment,
-                    limiter,
+                    sem,
                     checkpoint,
                     results,
                     stats,
@@ -791,7 +734,7 @@ async def async_main(args: argparse.Namespace) -> None:
 
     if pending:
         client = build_client(az)
-        limiter = RateLimiter(concurrency, proc["target_rpm"], proc["target_tpm"])
+        sem = asyncio.Semaphore(concurrency)
         checkpoint_writer = CheckpointWriter(checkpoint_path, sig)
         stats = RunStats()
         start = time.monotonic()
@@ -802,7 +745,7 @@ async def async_main(args: argparse.Namespace) -> None:
                 stats,
                 client,
                 az["deployment"],
-                limiter,
+                sem,
                 checkpoint_writer,
                 proc["max_retries"],
                 proc["retry_base_delay"],
@@ -815,11 +758,8 @@ async def async_main(args: argparse.Namespace) -> None:
             "\n"
             + format_run_report(
                 stats,
-                limiter,
                 time.monotonic() - start,
                 concurrency,
-                proc["target_rpm"],
-                proc["target_tpm"],
                 n_skipped_empty,
             )
         )

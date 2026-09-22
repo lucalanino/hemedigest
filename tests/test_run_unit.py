@@ -18,7 +18,7 @@ from openai import (
 )
 
 from section_parser import parse_sections as ps
-from section_parser.parse_sections import RateLimiter, WorkUnit, process, run_unit
+from section_parser.parse_sections import WorkUnit, process, run_unit
 from section_parser.runlog import RunStats
 from section_parser.schemas.biopsy import SCHEMA as BIOPSY_SCHEMA
 from tests.conftest import make_completion
@@ -51,11 +51,11 @@ def unit():
 
 
 @pytest.fixture
-def generous_limiter():
-    return RateLimiter(max_concurrency=10, target_rpm=10_000, target_tpm=10_000_000)
+def sem():
+    return asyncio.Semaphore(10)
 
 
-async def run_it(unit, fake_client, limiter, max_retries=3, retry_base_delay=0.0):
+async def run_it(unit, fake_client, sem, max_retries=3, retry_base_delay=0.0):
     checkpoint = FakeCheckpoint()
     results: dict = {}
     stats = RunStats()
@@ -64,7 +64,7 @@ async def run_it(unit, fake_client, limiter, max_retries=3, retry_base_delay=0.0
         unit,
         fake_client,
         "gpt-5.4",
-        limiter,
+        sem,
         checkpoint,
         results,
         stats,
@@ -76,11 +76,11 @@ async def run_it(unit, fake_client, limiter, max_retries=3, retry_base_delay=0.0
     return checkpoint, results, stats, pbar
 
 
-async def test_success_on_first_attempt(fake_client, unit, generous_limiter):
+async def test_success_on_first_attempt(fake_client, unit, sem):
     fake_client.chat.completions.parse.return_value = make_completion(
         parsed=BIOPSY_SCHEMA(cellularity_pct=60), tokens=123
     )
-    checkpoint, results, stats, pbar = await run_it(unit, fake_client, generous_limiter)
+    checkpoint, results, stats, pbar = await run_it(unit, fake_client, sem)
 
     assert stats.parsed_ok == 1
     assert stats.calls == 1
@@ -92,9 +92,9 @@ async def test_success_on_first_attempt(fake_client, unit, generous_limiter):
     assert stats.peak_inflight == 1
 
 
-async def test_refusal_records_null_but_still_checkpoints(fake_client, unit, generous_limiter):
+async def test_refusal_records_null_but_still_checkpoints(fake_client, unit, sem):
     fake_client.chat.completions.parse.return_value = make_completion(refusal="cannot help")
-    checkpoint, results, stats, pbar = await run_it(unit, fake_client, generous_limiter)
+    checkpoint, results, stats, pbar = await run_it(unit, fake_client, sem)
 
     assert stats.refusals == 1
     assert stats.parsed_ok == 0
@@ -102,12 +102,12 @@ async def test_refusal_records_null_but_still_checkpoints(fake_client, unit, gen
     assert checkpoint.writes == [(unit.key, None)]
 
 
-async def test_rate_limit_then_success(fake_client, unit, generous_limiter):
+async def test_rate_limit_then_success(fake_client, unit, sem):
     fake_client.chat.completions.parse.side_effect = [
         make_rate_limit_error(),
         make_completion(parsed=BIOPSY_SCHEMA(cellularity_pct=50)),
     ]
-    checkpoint, results, stats, pbar = await run_it(unit, fake_client, generous_limiter)
+    checkpoint, results, stats, pbar = await run_it(unit, fake_client, sem)
 
     assert stats.http_429 == 1
     assert stats.retries == 1
@@ -117,9 +117,9 @@ async def test_rate_limit_then_success(fake_client, unit, generous_limiter):
     assert len(checkpoint.writes) == 1
 
 
-async def test_rate_limit_exhausts_retries(fake_client, unit, generous_limiter):
+async def test_rate_limit_exhausts_retries(fake_client, unit, sem):
     fake_client.chat.completions.parse.side_effect = [make_rate_limit_error() for _ in range(3)]
-    checkpoint, results, stats, pbar = await run_it(unit, fake_client, generous_limiter, max_retries=2)
+    checkpoint, results, stats, pbar = await run_it(unit, fake_client, sem, max_retries=2)
 
     assert stats.http_429 == 3
     assert stats.retries == 2
@@ -136,9 +136,9 @@ async def test_rate_limit_exhausts_retries(fake_client, unit, generous_limiter):
     assert stats.peak_inflight == 1
 
 
-async def test_length_finish_reason_error_is_non_retryable(fake_client, unit, generous_limiter):
+async def test_length_finish_reason_error_is_non_retryable(fake_client, unit, sem):
     fake_client.chat.completions.parse.side_effect = LengthFinishReasonError(completion=SimpleNamespace(usage=None))
-    checkpoint, results, stats, pbar = await run_it(unit, fake_client, generous_limiter)
+    checkpoint, results, stats, pbar = await run_it(unit, fake_client, sem)
 
     assert stats.length_nulls == 1
     assert stats.calls == 1  # no retry attempted
@@ -146,9 +146,9 @@ async def test_length_finish_reason_error_is_non_retryable(fake_client, unit, ge
     assert checkpoint.writes == [(unit.key, None)]
 
 
-async def test_content_filter_error_is_non_retryable(fake_client, unit, generous_limiter):
+async def test_content_filter_error_is_non_retryable(fake_client, unit, sem):
     fake_client.chat.completions.parse.side_effect = ContentFilterFinishReasonError()
-    checkpoint, results, stats, pbar = await run_it(unit, fake_client, generous_limiter)
+    checkpoint, results, stats, pbar = await run_it(unit, fake_client, sem)
 
     assert stats.content_filter_nulls == 1
     assert stats.calls == 1
@@ -156,7 +156,7 @@ async def test_content_filter_error_is_non_retryable(fake_client, unit, generous
     assert checkpoint.writes == [(unit.key, None)]
 
 
-async def test_process_runs_multiple_units_and_populates_results(fake_client, generous_limiter):
+async def test_process_runs_multiple_units_and_populates_results(fake_client, sem):
     units = [
         WorkUnit("k1", BIOPSY_SCHEMA, "prompt", "text-1"),
         WorkUnit("k2", BIOPSY_SCHEMA, "prompt", "text-2"),
@@ -184,7 +184,7 @@ async def test_process_runs_multiple_units_and_populates_results(fake_client, ge
         stats,
         fake_client,
         "gpt-5.4",
-        generous_limiter,
+        sem,
         checkpoint,
         max_retries=3,
         retry_base_delay=0.0,
@@ -199,28 +199,70 @@ async def test_process_runs_multiple_units_and_populates_results(fake_client, ge
     assert len(checkpoint.writes) == 3
 
 
-async def test_limiter_is_reacquired_on_every_retry_attempt(fake_client, unit, generous_limiter):
-    real_acquire = generous_limiter.acquire
-    acquire_calls: list[int] = []
+async def test_semaphore_slot_is_released_while_backing_off(fake_client, unit, sem, monkeypatch):
+    """The backoff sleep runs outside the slot, so a retrying unit doesn't block others."""
+    free_during_backoff: list[int] = []
 
-    async def counting_acquire(est_tokens):
-        acquire_calls.append(est_tokens)
-        return await real_acquire(est_tokens)
+    async def fake_sleep(seconds):
+        free_during_backoff.append(sem._value)
 
-    generous_limiter.acquire = counting_acquire
+    monkeypatch.setattr(ps.asyncio, "sleep", fake_sleep)
 
     fake_client.chat.completions.parse.side_effect = [
         make_rate_limit_error(),
         make_completion(parsed=BIOPSY_SCHEMA(cellularity_pct=50)),
     ]
-    await run_it(unit, fake_client, generous_limiter)
+    await run_it(unit, fake_client, sem)
 
-    # one acquire() for the failed attempt, one for the retry -- if acquire() were
-    # hoisted out of the retry loop, this would be 1 regardless of retry count
-    assert len(acquire_calls) == 2
+    assert free_during_backoff == [10], "all ten slots should be free while waiting to retry"
 
 
-async def test_retry_backoff_follows_exponential_formula(fake_client, unit, generous_limiter, monkeypatch):
+async def test_retry_after_header_overrides_the_backoff_curve(fake_client, unit, sem, monkeypatch):
+    """A 429 carrying Retry-After waits the server's figure when it is the longer one."""
+    slept: list[float] = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr(ps.asyncio, "sleep", fake_sleep)
+
+    response = httpx.Response(
+        status_code=429,
+        headers={"retry-after": "30"},
+        request=httpx.Request("POST", "https://example.com"),
+    )
+    fake_client.chat.completions.parse.side_effect = [
+        RateLimitError("slow down", response=response, body=None),
+        make_completion(parsed=BIOPSY_SCHEMA(cellularity_pct=50)),
+    ]
+    await run_it(unit, fake_client, sem, retry_base_delay=1.0)
+
+    assert slept == [30.0]  # not the 1.0 the curve would have chosen
+
+
+async def test_backoff_curve_wins_when_retry_after_is_shorter(fake_client, unit, sem, monkeypatch):
+    slept: list[float] = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr(ps.asyncio, "sleep", fake_sleep)
+
+    response = httpx.Response(
+        status_code=429,
+        headers={"retry-after-ms": "250"},
+        request=httpx.Request("POST", "https://example.com"),
+    )
+    fake_client.chat.completions.parse.side_effect = [
+        RateLimitError("slow down", response=response, body=None),
+        make_completion(parsed=BIOPSY_SCHEMA(cellularity_pct=50)),
+    ]
+    await run_it(unit, fake_client, sem, retry_base_delay=4.0)
+
+    assert slept == [4.0]  # 0.25s from the header is shorter, so the curve holds
+
+
+async def test_retry_backoff_follows_exponential_formula(fake_client, unit, sem, monkeypatch):
     real_sleep = asyncio.sleep
     sleep_calls: list[float] = []
 
@@ -231,7 +273,7 @@ async def test_retry_backoff_follows_exponential_formula(fake_client, unit, gene
     monkeypatch.setattr(ps.asyncio, "sleep", fake_sleep)
 
     fake_client.chat.completions.parse.side_effect = [make_rate_limit_error() for _ in range(3)]
-    await run_it(unit, fake_client, generous_limiter, max_retries=2, retry_base_delay=1.0)
+    await run_it(unit, fake_client, sem, max_retries=2, retry_base_delay=1.0)
 
     # retry_base_delay * 2**attempt for each retryable, non-final attempt (0, 1);
     # the final, exhausted attempt breaks out without sleeping again
@@ -244,10 +286,10 @@ def make_bad_request_error(code=None, message="Unrecognized request argument sup
     return BadRequestError(message, response=response, body=body)
 
 
-async def test_bad_request_fails_fast_without_retrying(fake_client, unit, generous_limiter):
+async def test_bad_request_fails_fast_without_retrying(fake_client, unit, sem):
     """A deterministic 400 must not burn the retry budget."""
     fake_client.chat.completions.parse.side_effect = [make_bad_request_error() for _ in range(5)]
-    checkpoint, results, stats, pbar = await run_it(unit, fake_client, generous_limiter, max_retries=4)
+    checkpoint, results, stats, pbar = await run_it(unit, fake_client, sem, max_retries=4)
 
     assert stats.calls == 1  # one attempt, not max_retries + 1
     assert stats.fatal_api_errors == 1
@@ -278,19 +320,19 @@ async def test_bad_request_fails_fast_without_retrying(fake_client, unit, genero
     ],
     ids=["401", "403", "404"],
 )
-async def test_auth_and_deployment_errors_fail_fast(fake_client, unit, generous_limiter, exc_factory):
+async def test_auth_and_deployment_errors_fail_fast(fake_client, unit, sem, exc_factory):
     fake_client.chat.completions.parse.side_effect = [exc_factory()]
-    checkpoint, results, stats, pbar = await run_it(unit, fake_client, generous_limiter, max_retries=4)
+    checkpoint, results, stats, pbar = await run_it(unit, fake_client, sem, max_retries=4)
 
     assert stats.calls == 1
     assert stats.fatal_api_errors == 1
     assert checkpoint.writes == []
 
 
-async def test_prompt_content_filter_400_records_null_and_checkpoints(fake_client, unit, generous_limiter):
+async def test_prompt_content_filter_400_records_null_and_checkpoints(fake_client, unit, sem):
     """A 400 carrying code=content_filter is a permanent null, not a config error."""
     fake_client.chat.completions.parse.side_effect = [make_bad_request_error(code="content_filter")]
-    checkpoint, results, stats, pbar = await run_it(unit, fake_client, generous_limiter)
+    checkpoint, results, stats, pbar = await run_it(unit, fake_client, sem)
 
     assert stats.content_filter_nulls == 1
     assert stats.fatal_api_errors == 0
