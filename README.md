@@ -5,12 +5,12 @@ Parse free text from bone marrow pathology reports into a structured tabular for
 ## A quick reminder
 
 This sends your report text to Azure OpenAI. If that text is PHI, take a
-sec to make sure that's actually okay under your institution's policies and
-applicable law before you point this at real data.
+sec to make sure it is actually okay under your institution's policies and
+applicable law before you point this at real patient data.
 
 ## Input
 
-The parser expects JSONL: each line is one report, already split into sections.
+The parser expects JSONL: each line is one report split into sections.
 Set the path in `config.yaml` under `files.input_jsonl`.
 
 The only required keys are the section(s) listed in `config.yaml` under
